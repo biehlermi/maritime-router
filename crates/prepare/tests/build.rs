@@ -5,6 +5,9 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
     reason = "test helpers on small synthetic scenes"
 )]
 
@@ -304,7 +307,7 @@ fn file_loads_and_routes() {
     request.avoid = vec![PASSAGE.into()];
     let route = router.route(&request).unwrap();
     let leg = &route.legs[0];
-    assert!(leg.passages.is_empty());
+    assert_eq!(leg.passages, Vec::<String>::new());
     assert!(
         leg.distance.metres > direct * 1.3,
         "{} m",
