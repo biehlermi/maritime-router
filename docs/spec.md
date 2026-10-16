@@ -102,7 +102,7 @@ maritime-router/
 ├── viewer/
 │   └── index.html             # static MapLibre page to inspect routes and test results
 ├── scripts/
-│   └── download-osm.sh        # fetches source data (planet or regional extracts)
+│   └── osm-filter.sh          # filters a planet or regional PBF with osmium
 ├── openapi.yaml               # API contract, source of truth for the HTTP API
 ├── Dockerfile                 # server image; the data file is mounted, not baked in
 ├── README.md

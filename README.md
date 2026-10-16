@@ -48,7 +48,8 @@ These depart from the original specification and are documented here as it asks:
 | `crates/server` | `maritime-router-server`: HTTP API (axum) |
 | `crates/cli` | `maritime-router-cli`: route from the command line, run acceptance cases |
 | `crates/acceptance` | Acceptance case schema, checks and the land-crossing oracle |
-| `data/` | Curated passages and overrides (GeoJSON) |
+| `data/` | Curated passages and overrides (GeoJSON), see [`data/README.md`](data/README.md) |
+| `scripts/` | `osm-filter.sh`: filters a PBF with osmium for the build |
 | `config/prepare.toml` | Preparation parameters with documented defaults |
 | `testdata/cases.yaml` | Acceptance cases |
 | `viewer/` | Static MapLibre page to inspect routes |
@@ -58,6 +59,28 @@ These depart from the original specification and are documented here as it asks:
 
 _Coming with the first working build._ It will cover: download the source data,
 build a data file, run the server, request a route.
+
+## Source data
+
+Downloaded into `sources/` (git-ignored); see spec §4.
+
+```bash
+# Sea water polygons (~906 MB) and land polygons (~928 MB) from osmdata.openstreetmap.de
+cargo run --release -p maritime-router-prepare -- download
+# A Geofabrik extract for a regional build, or --planet for the full planet (~95 GB)
+cargo run --release -p maritime-router-prepare -- download --geofabrik europe/germany/schleswig-holstein
+# Inland water, harbour areas and ferry terminals from a PBF, as GeoJSONSeq
+scripts/osm-filter.sh sources/europe-germany-schleswig-holstein.osm.pbf
+# Check the curated passages and overrides
+cargo run -p maritime-router-prepare -- validate
+```
+
+Downloads resume after an interruption (rerun the command), are checked
+against the server's size and, for the planet and Geofabrik, the published
+MD5, and are recorded with their data timestamp in `sources/manifest.json`.
+`osm-filter.sh` uses a local `osmium` if installed, otherwise osmium-tool
+1.19.0 in a Docker image built from `scripts/osmium.Dockerfile`, and records
+the PBF's replication timestamp next to its output.
 
 ## Configuration
 
