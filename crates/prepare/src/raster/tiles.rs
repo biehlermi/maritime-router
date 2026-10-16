@@ -60,6 +60,19 @@ pub fn tiles_for_region(level: u8, bbox: Option<[f64; 4]>) -> Vec<CellId> {
     set.into_iter().collect()
 }
 
+/// The build tiles of a region made of several boxes (the union of
+/// [`tiles_for_region`] of each), sorted; `None` is every tile.
+pub fn tiles_for_regions(level: u8, boxes: Option<&[[f64; 4]]>) -> Vec<CellId> {
+    let Some(boxes) = boxes else {
+        return tiles_for_region(level, None);
+    };
+    let set: BTreeSet<CellId> = boxes
+        .iter()
+        .flat_map(|&b| tiles_for_region(level, Some(b)))
+        .collect();
+    set.into_iter().collect()
+}
+
 /// Processes `tiles` in parallel on the rayon pool and hands each result to
 /// `consume` as soon as it is ready (in no particular order). Only the
 /// tiles in flight, one per worker thread, are held in memory, so `consume`
@@ -87,6 +100,18 @@ mod tests {
             let t = CellId::from_latlon(LatLon::new(lat, lon)).parent(8);
             assert!(tiles.contains(&t));
         }
+    }
+
+    #[test]
+    fn several_boxes_are_a_union() {
+        let a = [8.6, 53.4, 10.1, 54.0];
+        let b = [9.5, 53.8, 11.0, 54.5];
+        let union = tiles_for_regions(8, Some(&[a, b]));
+        let mut expected = tiles_for_region(8, Some(a));
+        expected.extend(tiles_for_region(8, Some(b)));
+        expected.sort_unstable();
+        expected.dedup();
+        assert_eq!(union, expected);
     }
 
     #[test]

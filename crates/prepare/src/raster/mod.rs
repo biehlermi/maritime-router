@@ -80,7 +80,7 @@ use maritime_router_core::grid::{CellId, level_avg_size_m};
 
 pub use self::index::{SourceIndex, SourceIndexBuilder};
 pub use self::tile::process_tile;
-pub use self::tiles::{process_tiles, tiles_for_region};
+pub use self::tiles::{process_tiles, tiles_for_region, tiles_for_regions};
 pub use self::window::TileWindow;
 use crate::config::Config;
 

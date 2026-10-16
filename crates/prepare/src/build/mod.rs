@@ -75,8 +75,12 @@ pub struct Timings {
 pub struct BuildReport {
     /// Engine version that built the file.
     pub engine_version: String,
-    /// Region built (`None` = global).
+    /// Region built (`None` = global); the first box of a multi-region
+    /// build.
     pub bbox: Option<[f64; 4]>,
+    /// All boxes of the region (empty = global).
+    #[serde(default)]
+    pub boxes: Vec<[f64; 4]>,
     /// Build tile level.
     pub tile_level: u8,
     /// Raster level outside harbour regions.
@@ -91,12 +95,30 @@ pub struct BuildReport {
     pub timings: Timings,
 }
 
+/// Parameters of the global steps.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GraphParams {
+    /// Sea components below this area (m²) are dropped.
+    pub min_sea_component_m2: f64,
+}
+
+impl GraphParams {
+    /// The parameters from `[water]`.
+    pub fn from_config(config: &Config) -> Self {
+        Self {
+            min_sea_component_m2: config.water.min_sea_component_km2 * 1e6,
+        }
+    }
+}
+
 /// Runs the raster stage and the global steps on `tiles` and returns the
 /// graph sections (not yet validated) with the tile and graph counts.
+#[allow(clippy::too_many_arguments, reason = "the build's inputs")]
 pub fn build_graph(
     index: &SourceIndex,
     raster_params: &RasterParams,
     leaf_params: &LeafParams,
+    graph_params: GraphParams,
     tiles: &[CellId],
     meta: GraphMeta,
     passages: Vec<PassageInfo>,
@@ -143,7 +165,8 @@ pub fn build_graph(
     let tiles_s = start.elapsed().as_secs_f64();
 
     let start = Instant::now();
-    let (sections, graph_stats) = graph::assemble(leaves, meta, passages)?;
+    let (sections, graph_stats) =
+        graph::assemble(leaves, meta, passages, graph_params.min_sea_component_m2)?;
     Ok((
         sections,
         tile_stats,
@@ -193,7 +216,7 @@ pub fn run(options: &BuildOptions) -> Result<BuildReport> {
         .with_context(|| format!("reading {}", options.config_path.display()))?;
     let mut config = Config::load(&options.config_path)?;
     if let Some(bbox) = options.bbox {
-        config.region.bbox = Some(bbox);
+        config.region.set_bbox(bbox);
         config.check()?;
     }
     let src = &config.sources;
@@ -220,7 +243,8 @@ pub fn run(options: &BuildOptions) -> Result<BuildReport> {
     // their whole context.
     let index = SourceIndex::load(&config, 60_000.0 + raster_params.halo_m)?;
     let sources_s = start.elapsed().as_secs_f64();
-    let tiles = raster::tiles_for_region(raster_params.tile_level, config.region.bbox);
+    let boxes = config.region.boxes();
+    let tiles = raster::tiles_for_regions(raster_params.tile_level, boxes.as_deref());
     if options.progress {
         let (polygons, points, lines) = index.counts();
         eprintln!(
@@ -241,6 +265,7 @@ pub fn run(options: &BuildOptions) -> Result<BuildReport> {
         &index,
         &raster_params,
         &leaf_params,
+        GraphParams::from_config(&config),
         &tiles,
         meta,
         passage_infos(&passages),
@@ -249,19 +274,22 @@ pub fn run(options: &BuildOptions) -> Result<BuildReport> {
     drop(index);
     if options.progress {
         eprintln!(
-            "graph: {} nodes, {} edges, {} land cells, {} components kept, {} dropped ({graph_s:.1} s)",
+            "graph: {} nodes, {} edges, {} land cells, {} components kept, {} dropped \
+             ({} small sea components) ({graph_s:.1} s)",
             graph_stats.nodes,
             graph_stats.edges,
             graph_stats.land_cells,
             graph_stats.kept_components,
-            graph_stats.dropped_components
+            graph_stats.dropped_components,
+            graph_stats.small_sea_components
         );
     }
 
     let start = Instant::now();
     let mut report = BuildReport {
         engine_version: maritime_router_core::ENGINE_VERSION.to_owned(),
-        bbox: config.region.bbox,
+        bbox: boxes.as_ref().and_then(|b| b.first().copied()),
+        boxes: boxes.clone().unwrap_or_default(),
         tile_level: raster_params.tile_level,
         coast_level: raster_params.coast_level,
         harbour_level: raster_params.harbour_level,

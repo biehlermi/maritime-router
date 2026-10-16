@@ -203,7 +203,11 @@ impl FileStats {
         if let Some(r) = &self.report {
             let t = &r.timings;
             let _ = writeln!(s, "\nbuild:");
-            if let Some(b) = r.bbox {
+            if r.boxes.len() > 1 {
+                for b in &r.boxes {
+                    let _ = writeln!(s, "  region box: {b:?}");
+                }
+            } else if let Some(b) = r.bbox {
                 let _ = writeln!(s, "  region: {b:?}");
             }
             let _ = writeln!(
@@ -233,8 +237,8 @@ impl FileStats {
             );
             let _ = writeln!(
                 s,
-                "  components: {} kept, {} dropped ({} leaves)",
-                g.kept_components, g.dropped_components, g.dropped_leaves
+                "  components: {} kept, {} dropped ({} leaves; {} small sea components)",
+                g.kept_components, g.dropped_components, g.dropped_leaves, g.small_sea_components
             );
             // The report is written before the file, so it has no write time.
             let _ = writeln!(
