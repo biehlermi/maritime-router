@@ -1,0 +1,288 @@
+openapi: 3.1.1
+info:
+  title: maritime-router
+  version: 0.1.0
+  summary: Realistic sea routes and distances between coordinates.
+  description: |
+    Calculates plausible routes a seagoing ship would sail between waypoints,
+    with distances in nautical miles and kilometres.
+
+    **Not for navigation.** Routes are estimates for visualisation only.
+
+    Route data © OpenStreetMap contributors (ODbL). Every displayed route must
+    carry this attribution.
+  license:
+    name: MIT OR Apache-2.0
+    identifier: MIT OR Apache-2.0
+
+# DRAFT: becomes generated-and-checked in PR 14 (utoipa output must match this file).
+
+servers:
+  - url: http://localhost:8080
+
+security:
+  - apiKey: []
+
+paths:
+  /v1/route:
+    post:
+      operationId: route
+      summary: One route through 2 or more waypoints
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RouteRequest' }
+      responses:
+        '200':
+          description: Route found
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RouteResponse' }
+        '304': { description: Not modified (matches If-None-Match) }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '503': { $ref: '#/components/responses/Problem' }
+
+  /v1/routes:
+    post:
+      operationId: routes
+      summary: Batch of independent routes
+      description: Each item succeeds or fails on its own; the batch itself returns 200.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [routes]
+              properties:
+                routes:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: { $ref: '#/components/schemas/RouteRequest' }
+      responses:
+        '200':
+          description: Per-item results, in request order
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results]
+                properties:
+                  results:
+                    type: array
+                    items:
+                      oneOf:
+                        - $ref: '#/components/schemas/RouteResponse'
+                        - $ref: '#/components/schemas/Problem'
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+
+  /v1/info:
+    get:
+      operationId: info
+      summary: Engine and data versions, passages, limits, attribution
+      responses:
+        '200':
+          description: Server information
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Info' }
+        '401': { $ref: '#/components/responses/Problem' }
+
+  /v1/health:
+    get:
+      operationId: health
+      summary: Liveness and readiness
+      security: []
+      responses:
+        '200':
+          description: Ready (data file loaded)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '503':
+          description: Live but not ready
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+
+components:
+  securitySchemes:
+    apiKey:
+      type: http
+      scheme: bearer
+
+  headers:
+    ETag:
+      description: Hash of the request, engine version and data version
+      schema: { type: string }
+
+  responses:
+    Problem:
+      description: RFC 9457 problem details
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+  schemas:
+    Coordinate:
+      type: object
+      required: [lat, lon]
+      additionalProperties: false
+      properties:
+        lat: { type: number, minimum: -90, maximum: 90 }
+        lon: { type: number, minimum: -180, maximum: 180 }
+
+    RouteRequest:
+      type: object
+      required: [waypoints]
+      additionalProperties: false
+      properties:
+        waypoints:
+          type: array
+          minItems: 2
+          maxItems: 50
+          items: { $ref: '#/components/schemas/Coordinate' }
+        avoid:
+          description: Passage IDs to forbid, overriding defaults
+          type: array
+          items: { type: string }
+          default: []
+        allow:
+          description: Passage IDs to permit, overriding defaults
+          type: array
+          items: { type: string }
+          default: []
+        geometry:
+          type: string
+          enum: [geojson, polyline6, none]
+          default: geojson
+        simplify_m:
+          type: number
+          minimum: 0
+          default: 0
+        antimeridian:
+          type: string
+          enum: [continuous, split]
+          default: continuous
+        max_snap_distance_m:
+          type: number
+          minimum: 0
+          maximum: 20000
+          default: 5000
+
+    SnapPoint:
+      type: object
+      required: [lat, lon, distance_m]
+      properties:
+        lat: { type: number }
+        lon: { type: number }
+        distance_m: { type: number, minimum: 0 }
+
+    Leg:
+      type: object
+      required: [from, to, distance_nm, distance_km, passages, snap]
+      properties:
+        from: { type: integer, minimum: 0 }
+        to: { type: integer, minimum: 1 }
+        distance_nm: { type: number, minimum: 0 }
+        distance_km: { type: number, minimum: 0 }
+        passages:
+          description: Passage IDs this leg uses
+          type: array
+          items: { type: string }
+        snap:
+          type: object
+          required: [start, end]
+          properties:
+            start: { $ref: '#/components/schemas/SnapPoint' }
+            end: { $ref: '#/components/schemas/SnapPoint' }
+        geometry:
+          description: GeoJSON LineString/MultiLineString ([lon, lat]) or a polyline6 string; absent when geometry is "none"
+          oneOf:
+            - type: object
+            - type: string
+
+    RouteResponse:
+      type: object
+      required: [distance_nm, distance_km, legs, warnings, engine_version, data_version, attribution]
+      properties:
+        distance_nm: { type: number, minimum: 0 }
+        distance_km: { type: number, minimum: 0 }
+        legs:
+          type: array
+          items: { $ref: '#/components/schemas/Leg' }
+        warnings:
+          type: array
+          items: { type: string }
+        engine_version: { type: string }
+        data_version: { type: string }
+        attribution: { type: string, const: © OpenStreetMap contributors }
+
+    Passage:
+      type: object
+      required: [id, name, default]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        default: { type: string, enum: [allowed, disallowed] }
+        limits:
+          description: Informational size limits; not enforced by the router
+          type: object
+          properties:
+            max_length_m: { type: number }
+            max_beam_m: { type: number }
+            max_draught_m: { type: number }
+            max_air_draft_m: { type: number }
+
+    Info:
+      type: object
+      required: [engine_version, data_version, passages, attribution, disclaimer, limits]
+      properties:
+        engine_version: { type: string }
+        data_version: { type: string }
+        passages:
+          type: array
+          items: { $ref: '#/components/schemas/Passage' }
+        attribution: { type: string }
+        disclaimer: { type: string }
+        limits:
+          type: object
+          properties:
+            max_waypoints: { type: integer }
+            max_batch: { type: integer }
+            max_snap_distance_m: { type: number }
+            timeout_s: { type: number }
+
+    Health:
+      type: object
+      required: [status, data_loaded]
+      properties:
+        status: { type: string }
+        data_loaded: { type: boolean }
+
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        code:
+          type: string
+          enum: [invalid_request, too_many_waypoints, no_water_nearby, no_route, unauthorized, rate_limited, timeout]
+        waypoint:
+          description: Index of the waypoint that failed (no_water_nearby)
+          type: integer
+        leg:
+          description: Index of the leg that failed (no_route)
+          type: integer

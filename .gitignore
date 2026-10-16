@@ -1,0 +1,8 @@
+/target
+# Built data files and downloaded sources are never committed (ODbL, size).
+*.mrd
+/sources/
+/results/
+*.osm.pbf
+*.zip
+.DS_Store
