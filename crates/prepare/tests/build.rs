@@ -431,3 +431,68 @@ fn narrow_diagonal_corridor_connects() {
     assert_eq!(g.component(west), g.component(east));
     assert_eq!(g.class(node_at(&g, 0.0, -100.0)), WaterClass::Passage);
 }
+
+#[test]
+fn override_fills_a_gap_between_water_polygons() {
+    // Sea in the west, inland water in the east, and between them a basin
+    // that the sources don't count as water (like the IJmuiden outer
+    // harbour, mapped as untagged natural=water). An override with exactly
+    // the basin's shape, sharing its edges with both, joins all three.
+    let f = FRAME;
+    let build = |with_override: bool| {
+        let mut b = SourceIndexBuilder::new(300.0, 300.0);
+        b.add_feature(&feature(
+            SourceClass::Sea,
+            f.rect(-6000.0, -6000.0, -1000.0, 6000.0).into(),
+        ));
+        b.add_feature(&feature(
+            SourceClass::InlandWater,
+            f.rect(1000.0, -600.0, 6000.0, 600.0).into(),
+        ));
+        if with_override {
+            b.add_overrides(&[Override {
+                id: None,
+                effect: OverrideEffect::ForceNavigable,
+                reason: "test".into(),
+                sources: vec![],
+                area: MultiPolygon(vec![f.rect(-1000.0, -600.0, 1000.0, 600.0)]),
+            }]);
+        }
+        let index = b.build();
+        let r = raster_params();
+        let sw = f.coord(-5000.0, -5000.0);
+        let ne = f.coord(5000.0, 5000.0);
+        let tiles = tiles_for_region(r.tile_level, Some([sw.x, sw.y, ne.x, ne.y]));
+        build::build_graph(
+            &index,
+            &r,
+            &leaf_params(&r),
+            build::GraphParams {
+                min_sea_component_m2: 0.0,
+            },
+            &tiles,
+            GraphMeta::new("test"),
+            Vec::new(),
+            false,
+        )
+        .unwrap()
+        .0
+    };
+    let sections = build(true);
+    let g = sections.validate().unwrap();
+    let (sea, gap, inland) = (
+        node_at(&g, -3000.0, 0.0),
+        node_at(&g, 0.0, 0.0),
+        node_at(&g, 3000.0, 0.0),
+    );
+    assert_eq!(g.component(sea), g.component(gap));
+    assert_eq!(g.component(sea), g.component(inland));
+    // Across the shared edges themselves (x = ±1000 m) there is water.
+    for x in [-1000.0, 1000.0] {
+        assert!(matches!(class_at(&g, x, 0.0), PointClass::Water(_)), "{x}");
+    }
+    // Without the override the inland water is cut off and dropped.
+    let without = build(false);
+    let g = without.validate().unwrap();
+    assert_eq!(class_at(&g, 3000.0, 0.0), PointClass::Land);
+}

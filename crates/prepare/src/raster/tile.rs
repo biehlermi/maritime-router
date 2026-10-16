@@ -46,8 +46,11 @@ pub fn process_tile(index: &SourceIndex, params: &RasterParams, tile: CellId) ->
         coarse
     };
     let clip = win.lonlat_bounds(CLIP_PAD_PX);
+    // Forced-navigable overrides join the union: an override that fills a
+    // gap between water polygons (say a harbour mapped without a water tag)
+    // must not leave a shore along the edges it shares with them.
     let is_water = |layer: Layer| {
-        matches!(layer, Layer::Sea | Layer::Inland)
+        matches!(layer, Layer::Sea | Layer::Inland | Layer::ForceNavigable)
             || (layer == Layer::Lake && params.include_lakes)
     };
 

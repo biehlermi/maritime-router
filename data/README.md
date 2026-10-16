@@ -64,4 +64,11 @@ harbour entrance closed by bad data; never to correct a single route.
 | `source` | no | String or array of strings: evidence (OSM IDs, charts, notices) |
 | `note` | no | Anything else worth knowing |
 
-Geometry: `Polygon` or `MultiPolygon`. There are no overrides yet.
+Geometry: `Polygon` or `MultiPolygon`. A `force_navigable` area joins the water
+union before shores are marked, so edges it shares with sea or inland water
+polygons are not shores; draw it as the exact water area, never buffered over
+land.
+
+| Override | Fixes |
+|---|---|
+| `ijmuiden_outer_harbour` | IJmuiden outer harbour mapped as untagged `natural=water`; without it the North Sea Canal is cut off from the sea |
