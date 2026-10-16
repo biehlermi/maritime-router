@@ -14,6 +14,7 @@
 //! traversal give bit-identical results on every platform.
 
 mod cell;
+mod closest;
 mod face;
 mod hilbert;
 mod metrics;
@@ -21,6 +22,7 @@ mod point;
 mod traverse;
 
 pub use cell::{CellId, MAX_LEVEL, MAX_SIZE, UvRect, locate};
+pub use closest::{closest_on_arc, move_towards};
 pub use face::{NUM_FACES, face_of, face_uv_to_xyz, face_xyz_to_uv, xyz_to_face_uv};
 pub use metrics::{level_avg_size_m, level_for_max_edge_m, level_max_edge_m, level_min_edge_m};
 pub use point::Point3;
