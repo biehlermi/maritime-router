@@ -3,6 +3,7 @@
 //!
 //! **Not for navigation.** Routes are estimates for visualisation only.
 
+pub mod format;
 pub mod geo;
 pub mod grid;
 
