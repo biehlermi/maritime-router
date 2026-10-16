@@ -12,12 +12,17 @@ publish.workspace = true
 [dependencies]
 blake3.workspace = true
 bytemuck.workspace = true
+geographiclib-rs = "0.2.7"
+libm = "0.2.16"
 memmap2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+proptest = "1.12.0"
+# Cross-check of the face/ID/neighbour maths in tests only.
+s2 = { version = "0.2.0", default-features = false }
 tempfile.workspace = true
 
 [lints]

@@ -4,6 +4,8 @@
 //! **Not for navigation.** Routes are estimates for visualisation only.
 
 pub mod format;
+pub mod geo;
+pub mod grid;
 
 /// Version of the routing engine, recorded in every data file and response.
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
