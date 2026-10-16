@@ -1,4 +1,123 @@
 {
   "type": "FeatureCollection",
-  "features": []
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "kiel",
+        "name": "Kiel Canal (Nord-Ostsee-Kanal)",
+        "default": "allowed",
+        "width_m": 36,
+        "source": "Geometry: centre line of OSM waterway=canal ways 1470915264, 1470915263, 144489148, 144489145, 1470915265, 144489147, 144489146, 60144851; OpenStreetMap contributors (ODbL), retrieved 2026-10-16 via the Overpass API and simplified to 3 m",
+        "note": "Brunsbüttel locks: both large chambers (usable 310 m x 42 m), from the Elbe outer harbour to the canal. The small 1895 chambers (125 m x 22 m) are left out. Width checked against the OSM lock and canal areas: the 36 m corridor stays inside water."
+      },
+      "geometry": {
+        "type": "MultiLineString",
+        "coordinates": [
+          [[9.117921, 53.879463], [9.120433, 53.880161], [9.122901, 53.881109], [9.124961, 53.882298], [9.129066, 53.885231], [9.129649, 53.885513], [9.13386, 53.887995], [9.136531, 53.889374], [9.141436, 53.891505], [9.147231, 53.894625], [9.15204, 53.89696]],
+          [[9.117921, 53.879463], [9.120433, 53.880161], [9.122901, 53.881109], [9.124961, 53.882298], [9.129066, 53.885231], [9.129649, 53.885513], [9.13386, 53.887995], [9.136531, 53.889374], [9.140493, 53.891854], [9.146584, 53.895013], [9.148457, 53.896053], [9.15204, 53.89696]]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "kiel",
+        "name": "Kiel Canal (Nord-Ostsee-Kanal)",
+        "default": "allowed",
+        "width_m": 60,
+        "limits": {
+          "max_length_m": 235.5,
+          "max_beam_m": 32.5,
+          "max_draught_m": 9.5,
+          "max_air_draft_m": 40
+        },
+        "limits_note": "Ships of the maximum length and beam may draw 7.0 m; the 9.5 m draught applies to ships up to 160 m long. Fixed bridges have 42 m clearance, so the air draft limit is 40 m.",
+        "source": [
+          "Geometry: centre line of OSM waterway=canal ways 30417811, 1490472671, 857248328, 50250427, 59908473; OpenStreetMap contributors (ODbL), retrieved 2026-10-16 via the Overpass API and simplified to 3 m",
+          "Limits: Seeschifffahrtsstraßen-Ordnung § 42 with the dimensions published under § 60 (https://www.gesetze-im-internet.de/seeschstro_1971/__42.html), as summarised at https://en.wikipedia.org/wiki/Kiel_Canal (retrieved 2026-10-16)"
+        ],
+        "note": "The canal from the Brunsbüttel inner harbour to the Kiel-Holtenau inner harbour (about 95 km along this line). The 60 m corridor stays inside the OSM canal area along its whole length; a 70 m corridor would touch the banks in places."
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [[9.15204, 53.89696], [9.161643, 53.902696], [9.172954, 53.908484], [9.188588, 53.917197], [9.195183, 53.921101], [9.204425, 53.927917], [9.210957, 53.932334], [9.223993, 53.941838], [9.271282, 53.976721], [9.280356, 53.983823], [9.281471, 53.98479], [9.285121, 53.988383], [9.29161, 53.997438], [9.292817, 54.000281], [9.295592, 54.009423], [9.297352, 54.016276], [9.297954, 54.018182], [9.300202, 54.026931], [9.300366, 54.028064], [9.302635, 54.035772], [9.303237, 54.038046], [9.305553, 54.047717], [9.307252, 54.053715], [9.31434, 54.071012], [9.329128, 54.098963], [9.329621, 54.1023], [9.329643, 54.105613], [9.329187, 54.109059], [9.327818, 54.117164], [9.328836, 54.123794], [9.329244, 54.124704], [9.333519, 54.132357], [9.337309, 54.136485], [9.342244, 54.140274], [9.349611, 54.144478], [9.368392, 54.151618], [9.384497, 54.156831], [9.409551, 54.162604], [9.4214, 54.165818], [9.434623, 54.170103], [9.44804, 54.174325], [9.453502, 54.175899], [9.46216, 54.177717], [9.476488, 54.180906], [9.486936, 54.182918], [9.505477, 54.186803], [9.514846, 54.188851], [9.519857, 54.18988], [9.538395, 54.194101], [9.545095, 54.195962], [9.547769, 54.197185], [9.554065, 54.199847], [9.560091, 54.202289], [9.562861, 54.203483], [9.572178, 54.208119], [9.575743, 54.20976], [9.584104, 54.213876], [9.58928, 54.21657], [9.594739, 54.220319], [9.601305, 54.226635], [9.60623, 54.232943], [9.610933, 54.241243], [9.615747, 54.248712], [9.620948, 54.25762], [9.630341, 54.2726], [9.631682, 54.274883], [9.634989, 54.278464], [9.63706, 54.280453], [9.639614, 54.282382], [9.645014, 54.285364], [9.651656, 54.288107], [9.658227, 54.289611], [9.673335, 54.291914], [9.679954, 54.29302], [9.687983, 54.294423], [9.694362, 54.295805], [9.699949, 54.29758], [9.703977, 54.299702], [9.70734, 54.301992], [9.709534, 54.304386], [9.7097, 54.304634], [9.71182, 54.308658], [9.712379, 54.312392], [9.712556, 54.314389], [9.713115, 54.315727], [9.714478, 54.320318], [9.716926, 54.32374], [9.719958, 54.326251], [9.725892, 54.329673], [9.727887, 54.330716], [9.731624, 54.332435], [9.733963, 54.333643], [9.73818, 54.335718], [9.746139, 54.33977], [9.749986, 54.341894], [9.753289, 54.34357], [9.761218, 54.347451], [9.771236, 54.352216], [9.77339, 54.353318], [9.777387, 54.355529], [9.782459, 54.358214], [9.784917, 54.359222], [9.787998, 54.36012], [9.793094, 54.361443], [9.799056, 54.362667], [9.804781, 54.363251], [9.811238, 54.363554], [9.829517, 54.363513], [9.845, 54.363778], [9.854363, 54.36335], [9.860144, 54.362483], [9.863238, 54.36188], [9.866972, 54.36089], [9.874111, 54.35875], [9.882417, 54.356046], [9.887513, 54.35449], [9.892749, 54.352998], [9.892882, 54.352857], [9.899899, 54.350731], [9.914762, 54.345977], [9.924006, 54.343118], [9.927078, 54.342416], [9.932922, 54.341454], [9.935228, 54.341179], [9.939388, 54.340835], [9.942241, 54.34082], [9.952064, 54.341231], [9.959, 54.341705], [9.9682, 54.342588], [9.97418, 54.343191], [9.979313, 54.34393], [9.984056, 54.344942], [9.988549, 54.346273], [9.99127, 54.347252], [9.994938, 54.348875], [10.000634, 54.351877], [10.006692, 54.354986], [10.009782, 54.356436], [10.014467, 54.358244], [10.018091, 54.359184], [10.021331, 54.359846], [10.024193, 54.360248], [10.026941, 54.360448], [10.032654, 54.360734], [10.036993, 54.360625], [10.039694, 54.360392], [10.042051, 54.360066], [10.047938, 54.35965], [10.05237, 54.35946], [10.056034, 54.359515], [10.057748, 54.359606], [10.060798, 54.360154], [10.063707, 54.361416], [10.067493, 54.363337], [10.072929, 54.366562], [10.077103, 54.368455], [10.078139, 54.368825], [10.082427, 54.370093], [10.088126, 54.371184], [10.094546, 54.371843], [10.099101, 54.372007], [10.10393, 54.371568], [10.123116, 54.368466], [10.127732, 54.367883], [10.134669, 54.367176]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "kiel",
+        "name": "Kiel Canal (Nord-Ostsee-Kanal)",
+        "default": "allowed",
+        "width_m": 36,
+        "source": "Geometry: centre line of OSM waterway=canal ways 59908522, 131279453, 1460296571, 59908544, 131279454, 1460296572; OpenStreetMap contributors (ODbL), retrieved 2026-10-16 via the Overpass API and simplified to 3 m",
+        "note": "Kiel-Holtenau locks: both new chambers (310 m x 42 m, OSM maxlength/maxwidth), from the canal to the Kiel Fjord."
+      },
+      "geometry": {
+        "type": "MultiLineString",
+        "coordinates": [
+          [[10.134669, 54.367176], [10.136922, 54.366249], [10.144409, 54.36518], [10.157831, 54.363111], [10.158963, 54.363133], [10.172095, 54.365808]],
+          [[10.134669, 54.367176], [10.144632, 54.365715], [10.157504, 54.363996], [10.15833, 54.363952], [10.158963, 54.363958], [10.172095, 54.365808]]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "ijmuiden",
+        "name": "IJmuiden locks and North Sea Canal (Noordzeekanaal)",
+        "default": "allowed",
+        "width_m": 50,
+        "source": [
+          "Geometry: centre line of OSM waterway=canal ways 1243335719, 1243335718, 1105335152; OpenStreetMap contributors (ODbL), retrieved 2026-10-16 via the Overpass API and simplified to 3 m",
+          "Lock dimensions: Port of Amsterdam, exemption regulations for ships transiting Zeesluis IJmuiden, decree 07/2022 (https://www.portofamsterdam.com/sites/default/files/2023-07/220127_07_%20Ontheffingsregels%20passage%20Zeesluis%20IJmuiden-EN_0.pdf)"
+        ],
+        "note": "Zeesluis IJmuiden (opened 2022; lockage length 500 m, 70 m between the walls), from the outer harbour to the canal. The OSM water areas are interrupted only at the gates, which this corridor bridges."
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [[4.581205, 52.468018], [4.604221, 52.466886], [4.614269, 52.466256], [4.627435, 52.464848]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "ijmuiden",
+        "name": "IJmuiden locks and North Sea Canal (Noordzeekanaal)",
+        "default": "allowed",
+        "width_m": 40,
+        "source": "Geometry: centre line of OSM waterway=canal ways 675852931, 458834170, 106783786; OpenStreetMap contributors (ODbL), retrieved 2026-10-16 via the Overpass API and simplified to 3 m",
+        "note": "Noordersluis (400 m x 50 m), the second lock for seagoing ships, from the outer harbour to the canal. The smaller Middensluis, Zuidersluis and Kleine Sluis are left out."
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [[4.581205, 52.468018], [4.592027, 52.468419], [4.605721, 52.467675], [4.615545, 52.467055], [4.619732, 52.466561], [4.627435, 52.464848]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "ijmuiden",
+        "name": "IJmuiden locks and North Sea Canal (Noordzeekanaal)",
+        "default": "allowed",
+        "width_m": 80,
+        "limits": {
+          "max_length_m": 325,
+          "max_beam_m": 42,
+          "max_draught_m": 13.1
+        },
+        "limits_note": "Without an exemption (seawater draught, eastbound). With an exemption from the harbour master up to 13.75 m draught; through Zeesluis IJmuiden for example cruise ships up to 362 m x 47 m. The canal is crossed by tunnels and ferries only, so there is no air draft limit.",
+        "source": [
+          "Geometry: centre line of OSM waterway=canal ways 105277152, 1558357913, 928909487, 360632524; OpenStreetMap contributors (ODbL), retrieved 2026-10-16 via the Overpass API and simplified to 3 m",
+          "Limits: Port of Amsterdam, marginal shipping exemptions (https://myport.portofamsterdam.com/en/applications/form/ontheffing-scheepvaart) and the Zeesluis IJmuiden exemption regulations, decree 07/2022 (retrieved 2026-10-16)"
+        ],
+        "note": "The North Sea Canal from the IJmuiden locks to the IJ in Amsterdam, ending east of the Passenger Terminal Amsterdam (about 23 km). The 80 m corridor stays inside the OSM canal area."
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [[4.627435, 52.464848], [4.63208, 52.46416], [4.646442, 52.463848], [4.65158, 52.4634], [4.655126, 52.463013], [4.660171, 52.462078], [4.6647, 52.460517], [4.669537, 52.458389], [4.70728, 52.437919], [4.709434, 52.4371], [4.715216, 52.435153], [4.721131, 52.433738], [4.722742, 52.433419], [4.794796, 52.424002], [4.821903, 52.420151], [4.837849, 52.418495], [4.852134, 52.416599], [4.856982, 52.415881], [4.861502, 52.41485], [4.867441, 52.412016], [4.869105, 52.41115], [4.874291, 52.408077], [4.882167, 52.402544], [4.885579, 52.400219], [4.891243, 52.395114], [4.892818, 52.39293], [4.895484, 52.388233], [4.897336, 52.384411], [4.89808, 52.383305], [4.904597, 52.380002], [4.908755, 52.379607], [4.91016, 52.379712], [4.913152, 52.380029]]
+      }
+    }
+  ]
 }

@@ -1,0 +1,13 @@
+{"type":"Feature","id":"a2","geometry":{"type":"Polygon","coordinates":[[[10.17,54.32],[10.18,54.32],[10.18,54.33],[10.17,54.33],[10.17,54.32]]]},"properties":{"natural":"water","water":"river","name":"Schwentine"}}
+{"type":"Feature","id":"a5","geometry":{"type":"MultiPolygon","coordinates":[[[[10.3,54.2],[10.31,54.2],[10.31,54.21],[10.3,54.21],[10.3,54.2]]],[[[10.33,54.2],[10.34,54.2],[10.34,54.21],[10.33,54.21],[10.33,54.2]]]]},"properties":{"type":"multipolygon","natural":"water","water":"lake"}}
+{"type":"Feature","id":"w3","geometry":{"type":"Polygon","coordinates":[[[10.15,54.33],[10.16,54.33],[10.16,54.339999999999996],[10.15,54.339999999999996],[10.15,54.33]]]},"properties":{"waterway":"riverbank"}}
+{"type":"Feature","id":"w4","geometry":{"type":"Polygon","coordinates":[[[10.13,54.31],[10.15,54.31],[10.15,54.330000000000005],[10.13,54.330000000000005],[10.13,54.31]]]},"properties":{"landuse":"harbour","name":"Kieler Hafen"}}
+{"type":"Feature","id":"n5","geometry":{"type":"Point","coordinates":[10.1365,54.3215]},"properties":{"amenity":"ferry_terminal","name":"Schwedenkai"}}
+{"type":"Feature","id":"n6","geometry":{"type":"Point","coordinates":[10.16,54.37]},"properties":{"seamark:type":"harbour","seamark:harbour:category":"marina"}}
+{"type":"Feature","id":"w7","geometry":{"type":"Polygon","coordinates":[[[10.1,54.3],[10.11,54.3],[10.11,54.309999999999995],[10.1,54.309999999999995],[10.1,54.3]]]},"properties":{"natural":"water","water":"pond"}}
+{"type":"Feature","id":"w8","geometry":{"type":"LineString","coordinates":[[10.1,54.3],[10.2,54.3]]},"properties":{"natural":"water","water":"river"}}
+{"type":"Feature","id":"w9","geometry":{"type":"LineString","coordinates":[[10.1,54.3],[10.1,54.31]]},"properties":{"highway":"residential"}}
+{"type":"Feature","id":"w10","geometry":{"type":"Polygon","coordinates":[[[10.14,54.32],[10.15,54.32],[10.15,54.33],[10.14,54.33],[10.14,54.32]]]},"properties":{"natural":"water","water":"harbour","landuse":"harbour"}}
+{"type":"Feature","id":"n11","geometry":{"type":"Point","coordinates":[10.1,54.3]},"properties":{"natural":"water","water":"river"}}
+
+{"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[-74.07,40.65],[-74.05999999999999,40.65],[-74.05999999999999,40.66],[-74.07,40.66],[-74.07,40.65]]]},"properties":{"@type":"way","@id":12,"industrial":"port"}}
