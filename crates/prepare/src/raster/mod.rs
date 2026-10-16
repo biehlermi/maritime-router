@@ -32,7 +32,12 @@
 //!    overrides are applied (blocked wins). Like shores, these boundaries are
 //!    conservative: a forced-navigable pixel lies entirely inside its
 //!    corridor or override, and any pixel a blocked area touches is blocked.
-//! 6. **Distances.** A Euclidean distance transform ([`edt`], Felzenszwalb
+//! 6. **Coast-level minimum.** In a tile rasterised at the harbour level,
+//!    a block of pixels forming one coast-level cell that is partly
+//!    non-navigable and lies outside every harbour region, passage and
+//!    override becomes non-navigable as a whole ([`PixelClass::Shore`]), so
+//!    coasts outside harbours get coast-level detail in every tile.
+//! 7. **Distances.** A Euclidean distance transform ([`edt`], Felzenszwalb
 //!    with the true local metric) gives each pixel's distance to the nearest
 //!    non-navigable pixel, saturating at the halo, and a granulometry (a
 //!    series of openings) gives the local channel width.

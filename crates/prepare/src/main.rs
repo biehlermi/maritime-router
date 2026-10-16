@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
+use maritime_router_prepare::build::{self, BuildOptions, stats::FileStats};
 use maritime_router_prepare::config::Config;
 use maritime_router_prepare::curated;
 use maritime_router_prepare::download::{Dataset, Downloader, FetchStatus, Mirrors};
@@ -33,10 +34,31 @@ enum Command {
     /// Rasterise and classify the build tiles (model build, part 1) and
     /// report statistics, optionally with debug images.
     Raster(RasterArgs),
-    /// Build the data file.
-    Build,
-    /// Print statistics about a data file.
-    Stats,
+    /// Build the data file (model build, parts 1 and 2).
+    Build(BuildArgs),
+    /// Print statistics about a data file: versions, cells per level and
+    /// class, nodes, edges, section sizes and the build report.
+    Stats(StatsArgs),
+}
+
+#[derive(Debug, Args)]
+struct BuildArgs {
+    /// The build configuration.
+    #[arg(long, default_value = "config/prepare.toml")]
+    config: PathBuf,
+    /// The data file to write.
+    #[arg(long)]
+    out: PathBuf,
+    /// Region to build instead of the configured one:
+    /// `min_lon,min_lat,max_lon,max_lat`.
+    #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
+    bbox: Option<Vec<f64>>,
+}
+
+#[derive(Debug, Args)]
+struct StatsArgs {
+    /// The data file.
+    file: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -108,10 +130,45 @@ fn main() -> Result<()> {
         Command::Download(args) => download(args),
         Command::Validate(args) => validate(&args),
         Command::Raster(args) => raster_cmd(&args),
-        Command::Build | Command::Stats => {
-            anyhow::bail!("not implemented yet")
+        Command::Build(args) => build_cmd(&args),
+        Command::Stats(args) => {
+            print!("{}", FileStats::load(&args.file)?.render());
+            Ok(())
         }
     }
+}
+
+fn bbox_arg(bbox: Option<&Vec<f64>>) -> Result<Option<[f64; 4]>> {
+    bbox.map(|b| {
+        anyhow::ensure!(b.len() == 4, "--bbox takes min_lon,min_lat,max_lon,max_lat");
+        Ok([b[0], b[1], b[2], b[3]])
+    })
+    .transpose()
+}
+
+fn build_cmd(args: &BuildArgs) -> Result<()> {
+    let options = BuildOptions {
+        config_path: args.config.clone(),
+        bbox: bbox_arg(args.bbox.as_ref())?,
+        out: args.out.clone(),
+        progress: true,
+    };
+    let report = build::run(&options)?;
+    let t = &report.timings;
+    println!(
+        "wrote {} ({} nodes, {} edges, {} land cells) in {:.1} s \
+         (sources {:.1} s, tiles {:.1} s, graph {:.1} s, write {:.1} s)",
+        args.out.display(),
+        report.graph.nodes,
+        report.graph.edges,
+        report.graph.land_cells,
+        t.total_s,
+        t.sources_s,
+        t.tiles_s,
+        t.graph_s,
+        t.write_s
+    );
+    Ok(())
 }
 
 fn download(args: DownloadArgs) -> Result<()> {
@@ -237,9 +294,8 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 fn raster_cmd(args: &RasterArgs) -> Result<()> {
     let mut config = Config::load(&args.config)?;
-    if let Some(b) = &args.bbox {
-        anyhow::ensure!(b.len() == 4, "--bbox takes min_lon,min_lat,max_lon,max_lat");
-        config.region.bbox = Some([b[0], b[1], b[2], b[3]]);
+    if let Some(b) = bbox_arg(args.bbox.as_ref())? {
+        config.region.bbox = Some(b);
         config.check()?;
     }
     let params = RasterParams::from_config(&config);
