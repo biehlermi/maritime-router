@@ -16,6 +16,7 @@ harbour_min_cell_m = 19        # inside harbour areas and around extra points
 max_cell_km = 40               # cap on leaf size, keeps the cell-centre graph a good metric
 coastal_band_km = 20           # distance from land where coastal detail applies
 cells_across_channel = 4       # width-adaptive refinement: at least this many cells across any channel
+tile_halo_m = 4000             # context around each ~40 km build tile; shore distances saturate here (>= shore_preferred_distance_m)
 
 [water]
 inland_min_width_m = 150       # inland water narrower than this is removed (morphological opening)
@@ -24,6 +25,7 @@ include_lakes = false          # lakes only via passage corridors or force_navig
 
 [harbour]
 ferry_terminal_buffer_m = 500  # buffer around amenity=ferry_terminal that gets harbour detail
+harbour_point_buffer_m = 500   # buffer around harbour points (harbour=yes nodes etc.) and extra_points
 # extra_points = [[lon, lat], ...]  # additional points that get harbour detail
 
 [routing]

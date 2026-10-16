@@ -1,11 +1,18 @@
 //! `maritime-router-prepare`: builds the binary data file from OpenStreetMap data.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::{Mutex, PoisonError};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
+use maritime_router_prepare::config::Config;
 use maritime_router_prepare::curated;
 use maritime_router_prepare::download::{Dataset, Downloader, FetchStatus, Mirrors};
+use maritime_router_prepare::raster::{
+    self, PixelClass, RasterParams, SourceIndex, TileResult, debug::Mosaic,
+};
 
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]
@@ -23,6 +30,9 @@ enum Command {
     Download(DownloadArgs),
     /// Validate data/passages.geojson and data/overrides.geojson.
     Validate(ValidateArgs),
+    /// Rasterise and classify the build tiles (model build, part 1) and
+    /// report statistics, optionally with debug images.
+    Raster(RasterArgs),
     /// Build the data file.
     Build,
     /// Print statistics about a data file.
@@ -70,11 +80,34 @@ struct ValidateArgs {
     overrides: PathBuf,
 }
 
+#[derive(Debug, Args)]
+struct RasterArgs {
+    /// The build configuration.
+    #[arg(long, default_value = "config/prepare.toml")]
+    config: PathBuf,
+    /// Region to process instead of the configured one:
+    /// `min_lon,min_lat,max_lon,max_lat`.
+    #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
+    bbox: Option<Vec<f64>>,
+    /// Directory for debug images: a north-up mosaic of all tiles plus, with
+    /// --tile-images, one image set per detailed tile.
+    #[arg(long)]
+    debug_png: Option<PathBuf>,
+    /// Also write classes, shore distance and width images for every
+    /// detailed tile.
+    #[arg(long, requires = "debug_png")]
+    tile_images: bool,
+    /// Level of the mosaic image (default: the coastal raster level).
+    #[arg(long)]
+    mosaic_level: Option<u8>,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Download(args) => download(args),
         Command::Validate(args) => validate(&args),
+        Command::Raster(args) => raster_cmd(&args),
         Command::Build | Command::Stats => {
             anyhow::bail!("not implemented yet")
         }
@@ -147,5 +180,119 @@ fn validate(args: &ValidateArgs) -> Result<()> {
         args.overrides.display(),
         overrides.len()
     );
+    Ok(())
+}
+
+/// What `raster` counts while tiles finish.
+#[derive(Debug, Default)]
+struct RasterStats {
+    /// Uniform tiles per class.
+    uniform: [u64; 10],
+    /// Detailed tiles per raster level.
+    rasters: BTreeMap<u8, u64>,
+    /// Pixels of detailed tiles per class.
+    pixels: [u64; 10],
+    errors: Vec<String>,
+}
+
+impl RasterStats {
+    fn add(&mut self, result: &TileResult) {
+        match result {
+            TileResult::Uniform { pixel, .. } => self.uniform[pixel.class() as usize] += 1,
+            TileResult::Raster(r) => {
+                *self.rasters.entry(r.level).or_default() += 1;
+                for (total, n) in self.pixels.iter_mut().zip(r.class_counts()) {
+                    *total += n;
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::cast_precision_loss, reason = "percentages")]
+    fn print(&self) {
+        for (level, n) in &self.rasters {
+            println!("  {n} detailed tiles at level {level}");
+        }
+        for class in PixelClass::ALL {
+            let n = self.uniform[class as usize];
+            if n > 0 {
+                println!("  {n} uniform {} tiles", class.name());
+            }
+        }
+        println!("pixels of detailed tiles:");
+        let total: u64 = self.pixels.iter().sum();
+        for class in PixelClass::ALL {
+            let n = self.pixels[class as usize];
+            if n > 0 {
+                let share = 100.0 * n as f64 / total.max(1) as f64;
+                println!("  {:>9} {n:>12} ({share:.2}%)", class.name());
+            }
+        }
+    }
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn raster_cmd(args: &RasterArgs) -> Result<()> {
+    let mut config = Config::load(&args.config)?;
+    if let Some(b) = &args.bbox {
+        anyhow::ensure!(b.len() == 4, "--bbox takes min_lon,min_lat,max_lon,max_lat");
+        config.region.bbox = Some([b[0], b[1], b[2], b[3]]);
+        config.check()?;
+    }
+    let params = RasterParams::from_config(&config);
+    let start = Instant::now();
+    // Read features up to a tile plus halo beyond the region, so edge tiles
+    // see their whole context.
+    let index = SourceIndex::load(&config, 60_000.0 + params.halo_m)?;
+    let (polygons, points, lines) = index.counts();
+    println!(
+        "sources: {polygons} polygons, {points} points, {lines} corridor lines ({:.1} s)",
+        start.elapsed().as_secs_f64()
+    );
+    let tiles = raster::tiles_for_region(params.tile_level, config.region.bbox);
+    println!(
+        "{} tiles at level {} (raster levels {} / {})",
+        tiles.len(),
+        params.tile_level,
+        params.coast_level,
+        params.harbour_level
+    );
+    if let Some(dir) = &args.debug_png {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
+    let mosaic_level = args.mosaic_level.unwrap_or(params.coast_level);
+    let mosaic = args
+        .debug_png
+        .as_ref()
+        .and_then(|_| Mosaic::new(&tiles, mosaic_level, 400_000_000))
+        .map(Mutex::new);
+    let stats = Mutex::new(RasterStats::default());
+    let start = Instant::now();
+    raster::process_tiles(&index, &params, &tiles, |result| {
+        if let (Some(dir), TileResult::Raster(r)) = (&args.debug_png, &result)
+            && args.tile_images
+            && let Err(e) = raster::debug::write_tile(dir, r)
+        {
+            lock(&stats).errors.push(e.to_string());
+        }
+        if let Some(m) = &mosaic {
+            lock(m).add(&result);
+        }
+        lock(&stats).add(&result);
+    });
+    let stats = stats.into_inner().unwrap_or_else(PoisonError::into_inner);
+    println!("processed in {:.1} s", start.elapsed().as_secs_f64());
+    stats.print();
+    if let (Some(dir), Some(m)) = (&args.debug_png, mosaic) {
+        let m = m.into_inner().unwrap_or_else(PoisonError::into_inner);
+        m.write(dir, "mosaic")?;
+        println!("wrote {}/mosaic-{{classes,shore}}.png", dir.display());
+    }
+    if !stats.errors.is_empty() {
+        anyhow::bail!("writing debug images: {}", stats.errors.join("; "));
+    }
     Ok(())
 }
