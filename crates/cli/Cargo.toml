@@ -12,8 +12,13 @@ publish.workspace = true
 [dependencies]
 maritime-router-core.workspace = true
 maritime-router-acceptance.workspace = true
+maritime-router-prepare.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true
