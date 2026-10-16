@@ -6,7 +6,8 @@
 //!
 //! 1. **Raster.** The tile plus halo is rasterised in its face's (u, v) plane
 //!    at the finest level it needs: [`RasterParams::harbour_level`] (~L19)
-//!    if a harbour region reaches it, else [`RasterParams::coast_level`]
+//!    if a harbour region or passage corridor reaches it, else
+//!    [`RasterParams::coast_level`]
 //!    (~L18). Pixel (x, y) of the core is exactly the cell at that level
 //!    with face coordinates `(i0 + x, j0 + y)`, so the quadtree build can
 //!    read cells straight off the raster. Great circles are straight lines
@@ -32,7 +33,20 @@
 //!    overrides are applied (blocked wins). Like shores, these boundaries are
 //!    conservative: a forced-navigable pixel lies entirely inside its
 //!    corridor or override, and any pixel a blocked area touches is blocked.
-//! 6. **Distances.** A Euclidean distance transform ([`edt`], Felzenszwalb
+//!    The one exception keeps narrow corridors connected: every pixel a
+//!    corridor's centre line touches is a passage pixel too. A chain of
+//!    pixels entirely inside a corridor is only edge-connected on every
+//!    heading if the corridor is at least 2√2 pixels wide (~50 m at L19), so
+//!    lock corridors would otherwise fall apart into diagonal steps. Such
+//!    a pixel lies within one pixel diagonal of the centre line, so it can
+//!    reach past a corridor narrower than two diagonals by the difference
+//!    (~5 m for the 40 m Kiel Canal locks).
+//! 6. **Coast-level minimum.** In a tile rasterised at the harbour level,
+//!    a block of pixels forming one coast-level cell that is partly
+//!    non-navigable and lies outside every harbour region, passage and
+//!    override becomes non-navigable as a whole ([`PixelClass::Shore`]), so
+//!    coasts outside harbours get coast-level detail in every tile.
+//! 7. **Distances.** A Euclidean distance transform ([`edt`], Felzenszwalb
 //!    with the true local metric) gives each pixel's distance to the nearest
 //!    non-navigable pixel, saturating at the halo, and a granulometry (a
 //!    series of openings) gives the local channel width.

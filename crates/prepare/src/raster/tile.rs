@@ -5,7 +5,7 @@ use maritime_router_core::grid::CellId;
 
 use super::edt::{self, Metric};
 use super::index::{Item, Layer, SourceIndex};
-use super::scan::Mask;
+use super::scan::{Mask, supercover_segment};
 use super::window::TileWindow;
 use super::{Pixel, PixelClass, RasterParams, TileRaster, TileResult};
 
@@ -32,13 +32,13 @@ pub fn process_tile(index: &SourceIndex, params: &RasterParams, tile: CellId) ->
             pixel: Pixel::new(PixelClass::Land),
         };
     }
+    // Harbour regions and passage corridors get the finest raster.
     let harbour = items.iter().any(|&(item, _)| match item {
-        Item::Point(_) => true,
+        Item::Point(_) | Item::Line(_) => true,
         Item::Polygon(i) => matches!(
             index.polygons[i as usize].layer,
-            Layer::HarbourArea | Layer::FerryArea
+            Layer::HarbourArea | Layer::FerryArea | Layer::PassageArea
         ),
-        Item::Line(_) => false,
     });
     let win = if harbour && params.harbour_level != params.coast_level {
         TileWindow::new(tile, params.harbour_level, params.halo_m)
@@ -222,6 +222,10 @@ fn rasterise(
             mark_capsule(w, h, metric, seg[0], seg[1], line.width_m / 2.0, |p| {
                 pixels[p] = passage;
             });
+            // The centre line's supercover keeps the corridor edge-connected
+            // where it is too narrow for a connected chain of pixels lying
+            // entirely inside it (under 2√2 pixels on a diagonal heading).
+            supercover_segment(seg[0], seg[1], w, h, |x, y| pixels[y * w + x] = passage);
         }
     }
     // Overrides: navigable inside, blocked wherever they touch.
@@ -240,6 +244,9 @@ fn rasterise(
     }
     for (px, &hb) in pixels.iter_mut().zip(&harbour.bits) {
         *px = px.with_harbour_region(hb);
+    }
+    if win.level > params.coast_level {
+        coarsen_outside_harbours(&mut pixels, win, params.coast_level);
     }
 
     // Shore distance and channel width on the final classes.
@@ -273,6 +280,50 @@ fn rasterise(
         half_diagonal_m: metric.half_diagonal() as f32,
         saturation_m: sat,
         width_saturation_m: width_sat,
+    }
+}
+
+/// Applies the coast-level minimum cell size outside harbour regions in a
+/// raster finer than the coast level: every block of pixels forming one
+/// cell at `coast_level` that is partly non-navigable and has no pixel in a
+/// harbour region, passage or override becomes non-navigable as a whole
+/// ([`PixelClass::Shore`]), as it would be in a coast-level raster. Harbour
+/// regions and curated corridors keep the finer detail. Runs before the
+/// distance transform, so shore distances and widths see the result.
+fn coarsen_outside_harbours(pixels: &mut [Pixel], win: &TileWindow, coast_level: u8) {
+    let b = 1i64 << (win.level - coast_level);
+    let (w, h) = (win.w as i64, win.h as i64);
+    // Window ranges of the blocks, aligned to the face grid at coast level.
+    let blocks = |origin: i64, len: i64| {
+        let first = origin.div_euclid(b);
+        let last = (origin + len - 1).div_euclid(b);
+        (first..=last).map(move |k| {
+            let lo = (k * b - origin).max(0);
+            let hi = ((k + 1) * b - origin).min(len);
+            (lo as usize, hi as usize)
+        })
+    };
+    for (y0, y1) in blocks(win.origin[1], h) {
+        for (x0, x1) in blocks(win.origin[0], w) {
+            let (mut navigable, mut blocked, mut fine) = (false, false, false);
+            for y in y0..y1 {
+                for p in &pixels[y * win.w + x0..y * win.w + x1] {
+                    navigable |= p.is_navigable();
+                    blocked |= !p.is_navigable();
+                    fine |= p.in_harbour_region()
+                        || matches!(p.class(), PixelClass::Passage | PixelClass::Override);
+                }
+            }
+            if navigable && blocked && !fine {
+                for y in y0..y1 {
+                    for p in &mut pixels[y * win.w + x0..y * win.w + x1] {
+                        if p.is_navigable() {
+                            *p = Pixel::new(PixelClass::Shore);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

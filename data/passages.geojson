@@ -7,9 +7,9 @@
         "id": "kiel",
         "name": "Kiel Canal (Nord-Ostsee-Kanal)",
         "default": "allowed",
-        "width_m": 36,
+        "width_m": 40,
         "source": "Geometry: centre line of OSM waterway=canal ways 1470915264, 1470915263, 144489148, 144489145, 1470915265, 144489147, 144489146, 60144851; OpenStreetMap contributors (ODbL), retrieved 2026-10-16 via the Overpass API and simplified to 3 m",
-        "note": "Brunsbüttel locks: both large chambers (usable 310 m x 42 m), from the Elbe outer harbour to the canal. The small 1895 chambers (125 m x 22 m) are left out. Width checked against the OSM lock and canal areas: the 36 m corridor stays inside water."
+        "note": "Brunsbüttel locks: both large chambers (usable 310 m x 42 m), from the Elbe outer harbour to the canal. The small 1895 chambers (125 m x 22 m) are left out. Width checked against the OSM lock and canal areas: the 40 m corridor stays inside water (42 m would touch the walls). It must be at least about 38 m so that harbour-level cells (~18 m) lying entirely inside it form an edge-connected chain on any heading."
       },
       "geometry": {
         "type": "MultiLineString",
@@ -50,9 +50,9 @@
         "id": "kiel",
         "name": "Kiel Canal (Nord-Ostsee-Kanal)",
         "default": "allowed",
-        "width_m": 36,
+        "width_m": 40,
         "source": "Geometry: centre line of OSM waterway=canal ways 59908522, 131279453, 1460296571, 59908544, 131279454, 1460296572; OpenStreetMap contributors (ODbL), retrieved 2026-10-16 via the Overpass API and simplified to 3 m",
-        "note": "Kiel-Holtenau locks: both new chambers (310 m x 42 m, OSM maxlength/maxwidth), from the canal to the Kiel Fjord."
+        "note": "Kiel-Holtenau locks: both new chambers (310 m x 42 m, OSM maxlength/maxwidth), from the canal to the Kiel Fjord. Width as for the Brunsbüttel locks: 40 m stays inside the OSM lock areas and keeps harbour-level cells edge-connected."
       },
       "geometry": {
         "type": "MultiLineString",
