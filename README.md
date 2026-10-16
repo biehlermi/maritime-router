@@ -82,6 +82,20 @@ MD5, and are recorded with their data timestamp in `sources/manifest.json`.
 1.19.0 in a Docker image built from `scripts/osmium.Dockerfile`, and records
 the PBF's replication timestamp next to its output.
 
+## Model build
+
+The first stage of the build rasterises and classifies the water in ~36 km
+tiles (see the `raster` module docs in `crates/prepare`). To inspect it for a
+region, with north-up debug images of the classes and the shore distance:
+
+```bash
+cargo run --release -p maritime-router-prepare -- raster --bbox 8.55,53.45,10.05,53.95 --debug-png out/raster
+```
+
+Add `--tile-images` for full-resolution class, shore-distance and channel-width
+images of every detailed tile. Examples from the Elbe between Cuxhaven and
+Hamburg are in [`docs/images/raster`](docs/images/raster).
+
 ## Configuration
 
 _Server environment variables will be documented here._

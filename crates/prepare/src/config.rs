@@ -1,0 +1,294 @@
+//! `config/prepare.toml`: the build parameters.
+//!
+//! Every key has a default, so a partial file (or none) is valid. Unknown
+//! keys are rejected, so typos don't go unnoticed.
+
+use std::path::{Path, PathBuf};
+
+use serde::Deserialize;
+
+/// The whole configuration file.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Config {
+    pub region: RegionConfig,
+    pub grid: GridConfig,
+    pub water: WaterConfig,
+    pub harbour: HarbourConfig,
+    pub routing: RoutingConfig,
+    pub sources: SourcesConfig,
+}
+
+/// `[region]`.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RegionConfig {
+    /// `[min_lon, min_lat, max_lon, max_lat]` in WGS84 degrees; `None` for a
+    /// global build.
+    pub bbox: Option<[f64; 4]>,
+}
+
+/// `[grid]`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GridConfig {
+    pub ocean_min_cell_m: f64,
+    pub coastal_min_cell_m: f64,
+    pub harbour_min_cell_m: f64,
+    pub max_cell_km: f64,
+    pub coastal_band_km: f64,
+    pub cells_across_channel: u32,
+    /// Context around each build tile, in metres. Shore distances saturate
+    /// at this value, so it must be at least `shore_preferred_distance_m`.
+    pub tile_halo_m: f64,
+}
+
+impl Default for GridConfig {
+    fn default() -> Self {
+        Self {
+            ocean_min_cell_m: 2400.0,
+            coastal_min_cell_m: 38.0,
+            harbour_min_cell_m: 19.0,
+            max_cell_km: 40.0,
+            coastal_band_km: 20.0,
+            cells_across_channel: 4,
+            tile_halo_m: 4000.0,
+        }
+    }
+}
+
+/// `[water]`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WaterConfig {
+    pub inland_min_width_m: f64,
+    pub harbour_min_width_m: f64,
+    pub include_lakes: bool,
+}
+
+impl Default for WaterConfig {
+    fn default() -> Self {
+        Self {
+            inland_min_width_m: 150.0,
+            harbour_min_width_m: 30.0,
+            include_lakes: false,
+        }
+    }
+}
+
+/// `[harbour]`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HarbourConfig {
+    pub ferry_terminal_buffer_m: f64,
+    /// Buffer around harbour points (`harbour=yes` nodes etc.) and
+    /// `extra_points`.
+    pub harbour_point_buffer_m: f64,
+    /// Extra `[lon, lat]` points that get harbour detail.
+    pub extra_points: Vec<[f64; 2]>,
+}
+
+impl Default for HarbourConfig {
+    fn default() -> Self {
+        Self {
+            ferry_terminal_buffer_m: 500.0,
+            harbour_point_buffer_m: 500.0,
+            extra_points: Vec::new(),
+        }
+    }
+}
+
+/// `[routing]`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RoutingConfig {
+    pub shore_preferred_distance_m: f64,
+    pub shore_penalty_max: f64,
+}
+
+impl Default for RoutingConfig {
+    fn default() -> Self {
+        Self {
+            shore_preferred_distance_m: 3704.0,
+            shore_penalty_max: 3.0,
+        }
+    }
+}
+
+/// `[sources]`: paths relative to the working directory.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SourcesConfig {
+    pub water_polygons: PathBuf,
+    pub land_polygons: PathBuf,
+    pub osm_filtered: PathBuf,
+    pub passages: PathBuf,
+    pub overrides: PathBuf,
+}
+
+impl Default for SourcesConfig {
+    fn default() -> Self {
+        Self {
+            water_polygons: "sources/water-polygons-split-4326".into(),
+            land_polygons: "sources/land-polygons-split-4326".into(),
+            osm_filtered: "sources/osm-filtered.geojsonseq".into(),
+            passages: "data/passages.geojson".into(),
+            overrides: "data/overrides.geojson".into(),
+        }
+    }
+}
+
+/// Errors reading or checking the configuration.
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("reading {path}: {source}")]
+    Io {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{path}: {source}")]
+    Parse {
+        path: String,
+        #[source]
+        source: toml::de::Error,
+    },
+    #[error("invalid configuration: {0}")]
+    Invalid(String),
+}
+
+impl Config {
+    /// Reads and checks `path`.
+    pub fn load(path: &Path) -> Result<Self, ConfigError> {
+        let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Io {
+            path: path.display().to_string(),
+            source,
+        })?;
+        Self::parse(&text, &path.display().to_string())
+    }
+
+    /// Parses and checks the text of a configuration file; `file` names it
+    /// in error messages.
+    pub fn parse(text: &str, file: &str) -> Result<Self, ConfigError> {
+        let config: Self = toml::from_str(text).map_err(|source| ConfigError::Parse {
+            path: file.to_owned(),
+            source,
+        })?;
+        config.check()?;
+        Ok(config)
+    }
+
+    /// Checks value ranges and the relations between values.
+    pub fn check(&self) -> Result<(), ConfigError> {
+        let mut problems = Vec::new();
+        let positive = |name: &str, v: f64, problems: &mut Vec<String>| {
+            if !(v.is_finite() && v > 0.0) {
+                problems.push(format!("{name} must be a positive number, got {v}"));
+            }
+        };
+        let g = &self.grid;
+        positive(
+            "grid.coastal_min_cell_m",
+            g.coastal_min_cell_m,
+            &mut problems,
+        );
+        positive(
+            "grid.harbour_min_cell_m",
+            g.harbour_min_cell_m,
+            &mut problems,
+        );
+        positive("grid.max_cell_km", g.max_cell_km, &mut problems);
+        positive("grid.tile_halo_m", g.tile_halo_m, &mut problems);
+        positive(
+            "water.inland_min_width_m",
+            self.water.inland_min_width_m,
+            &mut problems,
+        );
+        positive(
+            "water.harbour_min_width_m",
+            self.water.harbour_min_width_m,
+            &mut problems,
+        );
+        if g.harbour_min_cell_m > g.coastal_min_cell_m {
+            problems.push("grid.harbour_min_cell_m must not exceed grid.coastal_min_cell_m".into());
+        }
+        if g.tile_halo_m > 20_000.0 {
+            problems.push(format!(
+                "grid.tile_halo_m must be at most 20000, got {}",
+                g.tile_halo_m
+            ));
+        }
+        if g.tile_halo_m < self.routing.shore_preferred_distance_m {
+            problems.push(format!(
+                "grid.tile_halo_m ({}) must be at least routing.shore_preferred_distance_m ({}), \
+                 or shore distances saturate too early",
+                g.tile_halo_m, self.routing.shore_preferred_distance_m
+            ));
+        }
+        let h = &self.harbour;
+        for (name, v) in [
+            ("harbour.ferry_terminal_buffer_m", h.ferry_terminal_buffer_m),
+            ("harbour.harbour_point_buffer_m", h.harbour_point_buffer_m),
+            ("water.inland_min_width_m", self.water.inland_min_width_m),
+        ] {
+            if v > g.tile_halo_m {
+                problems.push(format!(
+                    "{name} ({v}) must not exceed grid.tile_halo_m ({})",
+                    g.tile_halo_m
+                ));
+            }
+        }
+        if h.ferry_terminal_buffer_m < 0.0 || h.harbour_point_buffer_m < 0.0 {
+            problems.push("harbour buffers must not be negative".into());
+        }
+        for p in &h.extra_points {
+            let valid = (-180.0..=180.0).contains(&p[0]) && (-90.0..=90.0).contains(&p[1]);
+            if !valid {
+                problems.push(format!("harbour.extra_points: invalid point {p:?}"));
+            }
+        }
+        if let Some([w, s, e, n]) = self.region.bbox {
+            let ok = [w, s, e, n].iter().all(|v| v.is_finite())
+                && (-180.0..=180.0).contains(&w)
+                && (-180.0..=180.0).contains(&e)
+                && (-90.0..=90.0).contains(&s)
+                && (-90.0..=90.0).contains(&n)
+                && w < e
+                && s < n;
+            if !ok {
+                problems.push(format!(
+                    "region.bbox must be [min_lon, min_lat, max_lon, max_lat] with min < max, got {:?}",
+                    [w, s, e, n]
+                ));
+            }
+        }
+        if problems.is_empty() {
+            Ok(())
+        } else {
+            Err(ConfigError::Invalid(problems.join("; ")))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn committed_file_parses() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/prepare.toml");
+        let config = Config::load(&path).unwrap();
+        assert_eq!(config.grid.tile_halo_m, 4000.0);
+        assert_eq!(config.water.inland_min_width_m, 150.0);
+        assert_eq!(config.region.bbox, None);
+    }
+
+    #[test]
+    fn rejects_bad_values() {
+        assert!(Config::parse("[grid]\ntile_halo_m = 1000\n", "t").is_err());
+        assert!(Config::parse("[grid]\ntypo = 1\n", "t").is_err());
+        assert!(Config::parse("[region]\nbbox = [10, 50, 9, 51]\n", "t").is_err());
+        let ok = Config::parse("[region]\nbbox = [8.5, 53.4, 10.1, 54.0]\n", "t").unwrap();
+        assert_eq!(ok.region.bbox, Some([8.5, 53.4, 10.1, 54.0]));
+    }
+}
