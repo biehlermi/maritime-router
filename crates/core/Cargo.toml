@@ -1,0 +1,16 @@
+[package]
+name = "maritime-router-core"
+description = "Data model, data file reader, search, smoothing and geodesy for maritime-router"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[lints]
+workspace = true

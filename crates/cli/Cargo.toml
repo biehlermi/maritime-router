@@ -1,0 +1,19 @@
+[package]
+name = "maritime-router-cli"
+description = "Command-line routing and acceptance test runner for maritime-router"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+maritime-router-core.workspace = true
+maritime-router-acceptance.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+
+[lints]
+workspace = true

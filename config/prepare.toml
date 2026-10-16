@@ -1,0 +1,38 @@
+# Parameters for `maritime-router-prepare build`.
+# Every value here is hashed into the data file header, so a data file always
+# records exactly how it was built. Defaults are start values, tuned in Phase 1.
+
+[region]
+# Bounding box to build: [min_lon, min_lat, max_lon, max_lat] in WGS84 degrees.
+# Omit for a global build.
+# bbox = [-75.0, 35.0, 32.0, 72.0]
+
+[grid]
+# Cell size limits (metres). Cells are split while they contain both water and
+# land, down to the minimum size allowed for their region.
+ocean_min_cell_m = 2400        # open ocean beyond the coastal band
+coastal_min_cell_m = 38        # within the coastal band, inland and passage water
+harbour_min_cell_m = 19        # inside harbour areas and around extra points
+max_cell_km = 40               # cap on leaf size, keeps the cell-centre graph a good metric
+coastal_band_km = 20           # distance from land where coastal detail applies
+cells_across_channel = 4       # width-adaptive refinement: at least this many cells across any channel
+
+[water]
+inland_min_width_m = 150       # inland water narrower than this is removed (morphological opening)
+harbour_min_width_m = 30       # harbour water narrower than this is removed
+include_lakes = false          # lakes only via passage corridors or force_navigable overrides
+
+[harbour]
+ferry_terminal_buffer_m = 500  # buffer around amenity=ferry_terminal that gets harbour detail
+# extra_points = [[lon, lat], ...]  # additional points that get harbour detail
+
+[routing]
+shore_preferred_distance_m = 3704  # ~2 nm; closer cells get a cost multiplier
+shore_penalty_max = 3.0            # multiplier at the shore
+
+[sources]
+water_polygons = "sources/water-polygons-split-4326"
+land_polygons = "sources/land-polygons-split-4326"  # only used by the test oracle
+osm_filtered = "sources/osm-filtered.geojsonseq"
+passages = "data/passages.geojson"
+overrides = "data/overrides.geojson"
