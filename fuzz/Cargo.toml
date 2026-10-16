@@ -1,0 +1,28 @@
+[package]
+name = "maritime-router-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+maritime-router-core = { path = "../crates/core" }
+serde_json = "1.0.154"
+
+# Not part of the main workspace: fuzzing needs a nightly toolchain.
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "data_file_loader"
+path = "fuzz_targets/data_file_loader.rs"
+test = false
+doc = false
+bench = false
