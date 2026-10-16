@@ -5,7 +5,7 @@ use maritime_router_core::grid::CellId;
 
 use super::edt::{self, Metric};
 use super::index::{Item, Layer, SourceIndex};
-use super::scan::Mask;
+use super::scan::{Mask, supercover_segment};
 use super::window::TileWindow;
 use super::{Pixel, PixelClass, RasterParams, TileRaster, TileResult};
 
@@ -32,13 +32,13 @@ pub fn process_tile(index: &SourceIndex, params: &RasterParams, tile: CellId) ->
             pixel: Pixel::new(PixelClass::Land),
         };
     }
+    // Harbour regions and passage corridors get the finest raster.
     let harbour = items.iter().any(|&(item, _)| match item {
-        Item::Point(_) => true,
+        Item::Point(_) | Item::Line(_) => true,
         Item::Polygon(i) => matches!(
             index.polygons[i as usize].layer,
-            Layer::HarbourArea | Layer::FerryArea
+            Layer::HarbourArea | Layer::FerryArea | Layer::PassageArea
         ),
-        Item::Line(_) => false,
     });
     let win = if harbour && params.harbour_level != params.coast_level {
         TileWindow::new(tile, params.harbour_level, params.halo_m)
@@ -222,6 +222,10 @@ fn rasterise(
             mark_capsule(w, h, metric, seg[0], seg[1], line.width_m / 2.0, |p| {
                 pixels[p] = passage;
             });
+            // The centre line's supercover keeps the corridor edge-connected
+            // where it is too narrow for a connected chain of pixels lying
+            // entirely inside it (under 2√2 pixels on a diagonal heading).
+            supercover_segment(seg[0], seg[1], w, h, |x, y| pixels[y * w + x] = passage);
         }
     }
     // Overrides: navigable inside, blocked wherever they touch.

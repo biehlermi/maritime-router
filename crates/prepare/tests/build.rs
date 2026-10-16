@@ -344,3 +344,59 @@ fn assert_no_land(router: &Router, points: &[LatLon]) {
         }
     }
 }
+
+/// A lock-like corridor narrower than two pixel diagonals, on a diagonal
+/// heading, still joins two seas: the centre line's pixels keep it
+/// edge-connected (pixels entirely inside it would only touch at corners).
+#[test]
+fn narrow_diagonal_corridor_connects() {
+    let f = FRAME;
+    let mut b = SourceIndexBuilder::new(300.0, 300.0);
+    for p in [
+        f.rect(-6000.0, -6000.0, -1000.0, 6000.0),
+        f.rect(1000.0, -6000.0, 6000.0, 6000.0),
+    ] {
+        b.add_feature(&feature(SourceClass::Sea, p.into()));
+    }
+    let passages = vec![Passage {
+        id: "lock".into(),
+        name: "Lock".into(),
+        default: PassageDefault::Allowed,
+        limits: Limits::default(),
+        limits_note: None,
+        features: vec![PassageFeature {
+            corridor: Corridor::Line {
+                line: MultiLineString(vec![LineString(vec![
+                    f.coord(-1200.0, -1300.0),
+                    f.coord(1200.0, 1100.0),
+                ])]),
+                // About 1.1 pixel diagonals at the harbour level (L18, ~38 m).
+                width_m: 60.0,
+            },
+            sources: vec!["test".into()],
+            note: None,
+        }],
+    }];
+    b.add_passages(&passages);
+    let index = b.build();
+    let r = raster_params();
+    let sw = f.coord(-5000.0, -5000.0);
+    let ne = f.coord(5000.0, 5000.0);
+    let tiles = tiles_for_region(r.tile_level, Some([sw.x, sw.y, ne.x, ne.y]));
+    let (sections, tile_stats, _, _) = build::build_graph(
+        &index,
+        &r,
+        &leaf_params(&r),
+        &tiles,
+        GraphMeta::new("test"),
+        build::passage_infos(&passages),
+        false,
+    )
+    .unwrap();
+    // Corridor tiles get the harbour raster level.
+    assert!(tile_stats.raster_levels.iter().any(|&(l, _)| l == 18));
+    let g = sections.validate().unwrap();
+    let (west, east) = (node_at(&g, -3000.0, 0.0), node_at(&g, 3000.0, 0.0));
+    assert_eq!(g.component(west), g.component(east));
+    assert_eq!(g.class(node_at(&g, 0.0, -100.0)), WaterClass::Passage);
+}
