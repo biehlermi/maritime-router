@@ -78,6 +78,12 @@ impl CellId {
         c.is_valid().then_some(c)
     }
 
+    /// A cell from a raw ID that is already known to be valid (for example
+    /// validated when a data file was loaded).
+    pub(crate) const fn from_raw_unchecked(raw: u64) -> Self {
+        Self(raw)
+    }
+
     /// The raw 64-bit ID.
     pub const fn raw(self) -> u64 {
         self.0

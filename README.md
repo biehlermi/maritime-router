@@ -38,6 +38,10 @@ These depart from the original specification and are documented here as it asks:
 | Land safety | A cell is navigable only if it is entirely water; every route is also checked against the original OSM land polygons in tests | "Never crosses land" holds by construction and is verified independently |
 | Search | Contraction Hierarchies with per-passage flags on edges; A* kept as the reference | Searches in well under a millisecond while keeping every avoid/allow combination exact |
 | Lakes | Only navigable inside a passage corridor or an explicit override | Prevents inland leaks such as Baltic → Volga → Caspian |
+| Snapping | Among water cells within 150 m of the nearest, the one farthest from shore wins | A terminal on a pier snaps to the fairway, not into a narrow side basin |
+| Smoothing | String pulling, then corner cutting and sliding, all checked cell by cell against an adaptive clearance (`min(class target, 0.9 × shore distance)` of the cells replaced) | Taut, ship-like courses that keep their distance from headlands and stay centred in narrow channels; it always succeeds |
+| Leg direction | Each leg is computed in a fixed orientation and reversed when needed | A→B and B→A are mirror images with equal distances |
+| Simplification | `simplify_m` drops corners that deviate at most that much, before densifying, and only if the shortcut keeps the clearance minus the tolerance | Densified great-circle points stay; the line never comes closer to land than the tolerance allows |
 
 ## Repository layout
 

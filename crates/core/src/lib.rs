@@ -6,6 +6,9 @@
 pub mod format;
 pub mod geo;
 pub mod grid;
+pub mod model;
+pub mod route;
+pub mod synthetic;
 
 /// Version of the routing engine, recorded in every data file and response.
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
