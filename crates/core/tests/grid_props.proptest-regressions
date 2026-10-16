@@ -1,0 +1,12 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 082fe3829558e3e8e5acafb61481df9784c1b331d48d9aa28fa3b47b6d9f7524 # shrinks to p = LatLon { lat: 16.6923325127359, lon: -69.86374985003624 }
+cc ab0a1ac15f35ec2736f9b85dc9341514a7c0dec5139fe8bd435127e8f2ebc8ef # shrinks to (a, b) = (LatLon { lat: 85.99665036693187, lon: -113.02146797513588 }, LatLon { lat: 90.0, lon: -113.02146797513588 }), level = 2
+cc 694c4bc9b94d99119aa3fbaa7d31e35a19775ed68e864f949d8d9d7c9d4bf8da # shrinks to (a, b) = (LatLon { lat: 0.0, lon: -45.0 }, LatLon { lat: 0.0, lon: -65.85657208445537 }), level = 2
+cc 0c9c79458fba43f06b69636ba86d1f9520a577454f5fc78eb3034c549a514f6e # shrinks to (a, b) = (LatLon { lat: 0.0, lon: 45.0 }, LatLon { lat: 0.0, lon: 51.47887622587924 }), level = 2
+cc 5b48220161abf839ef1825c0e5301b7346c73b41562f35f7eb138c3cadb09910 # shrinks to (a, b) = (LatLon { lat: 0.0, lon: 0.0 }, LatLon { lat: 0.0, lon: 7.7909443392577895 }), coarse = 5, extra = 2
+cc 8e7355336236958c11a47f7c7b554d37c6754cac5c7d1c981a8e6bad0066c93f # shrinks to (a, b) = (LatLon { lat: 49.217095711156816, lon: 90.0 }, LatLon { lat: 32.88046126407217, lon: 90.0 }), level = 4

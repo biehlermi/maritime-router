@@ -10,7 +10,14 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
+geographiclib-rs = "0.2.7"
+libm = "0.2.16"
 thiserror.workspace = true
+
+[dev-dependencies]
+proptest = "1.12.0"
+# Cross-check of the face/ID/neighbour maths in tests only.
+s2 = { version = "0.2.0", default-features = false }
 
 [lints]
 workspace = true
