@@ -161,7 +161,9 @@ function withCircles(fc) {
 }
 
 const empty = { type: "FeatureCollection", features: [] };
-map.on("load", () => {
+// "style.load" rather than "load": the case list and routes must not wait
+// for basemap tiles.
+map.once("style.load", () => {
   map.addSource("all", { type: "geojson", data: empty });
   map.addSource("case", { type: "geojson", data: empty });
   map.addLayer({ id: "all-routes", type: "line", source: "all",
