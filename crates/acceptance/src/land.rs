@@ -8,9 +8,11 @@
 //!    with a cell traversal.
 //! 2. **Vector oracle** ([`VectorOracle`]): independent of the raster
 //!    pipeline, against the vector data: the osmdata **land polygons**
-//!    (`land-polygons-split-4326`), minus the OSM inland water areas the
-//!    model may route through (rivers, canals, locks, basins, harbour
-//!    water, from the filtered OSM file). The segments are cut into pieces
+//!    (`land-polygons-split-4326`), minus the water the model may route
+//!    through on purpose: the OSM inland water areas (rivers, canals,
+//!    locks, basins, harbour water, from the filtered OSM file), the
+//!    curated passage corridors and the `force_navigable` overrides
+//!    (`force_blocked` overrides count as land). The segments are cut into pieces
 //!    of at most [`PIECE_M`] along the great circle; a piece that crosses
 //!    no polygon edge is wholly in or out, a piece that crosses one is
 //!    sampled every metre. Polygon tests use longitude/latitude as plane
@@ -23,6 +25,7 @@ use geo::{BoundingRect, Geometry, Polygon};
 use maritime_router_core::geo::{EARTH_MEAN_RADIUS_M, LatLon};
 use maritime_router_core::grid::{Point3, move_towards};
 use maritime_router_core::model::{Graph, PointClass, walk_arc};
+use maritime_router_prepare::curated::{self, Corridor, OverrideEffect};
 use maritime_router_prepare::sources::{GeoJsonSeqReader, ShapefileReader, SourceClass};
 use rstar::{AABB, RTree, RTreeObject};
 use serde::{Deserialize, Serialize};
@@ -312,20 +315,72 @@ fn near_corridor(corridor: &RTree<PolygonBox>, geometry: &Geometry<f64>) -> bool
     })
 }
 
+/// The sources of a [`VectorOracle`].
+#[derive(Debug, Clone, Copy)]
+pub struct OracleSources<'a> {
+    /// The land polygons (a `.shp` file or the directory holding it).
+    pub land_polygons: &'a Path,
+    /// The filtered OSM file (its inland water counts as water).
+    pub osm_water: Option<&'a Path>,
+    /// `passages.geojson` (the corridors count as water).
+    pub passages: Option<&'a Path>,
+    /// `overrides.geojson` (`force_navigable` counts as water,
+    /// `force_blocked` as land).
+    pub overrides: Option<&'a Path>,
+}
+
+/// The rectangles covering a centre line buffered by `width_m` (each
+/// segment extended by half the width at both ends, so joints are
+/// covered), in longitude/latitude.
+pub fn corridor_polygons(line: &[[f64; 2]], width_m: f64) -> Vec<Polygon<f64>> {
+    let half = width_m / 2.0;
+    let deg = (1.0 / EARTH_MEAN_RADIUS_M).to_degrees();
+    let mut out = Vec::new();
+    for w in line.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let k = f64::midpoint(a[1], b[1]).to_radians().cos().max(1e-6);
+        // Local metric coordinates of b relative to a.
+        let (dx, dy) = ((b[0] - a[0]) / deg * k, (b[1] - a[1]) / deg);
+        let len = dx.hypot(dy);
+        if len == 0.0 {
+            continue;
+        }
+        let (ux, uy) = (dx / len, dy / len);
+        let corner = |p: [f64; 2], along: f64, side: f64| {
+            let mx = ux * along - uy * side;
+            let my = uy * along + ux * side;
+            geo::Coord {
+                x: p[0] + mx * deg / k,
+                y: p[1] + my * deg,
+            }
+        };
+        let ring = vec![
+            corner(a, -half, -half),
+            corner(b, half, -half),
+            corner(b, half, half),
+            corner(a, -half, half),
+            corner(a, -half, -half),
+        ];
+        out.push(Polygon::new(geo::LineString(ring), vec![]));
+    }
+    out
+}
+
 impl VectorOracle {
     /// An oracle from ready indexes (for tests).
     pub fn new(land: PolygonIndex, water: PolygonIndex) -> Self {
         Self { land, water }
     }
 
-    /// Loads the land polygons (a `.shp` file or the directory holding it)
-    /// and, if given, the inland water areas of the filtered OSM file,
-    /// keeping only polygons near `lines` (the lines to be checked later).
-    pub fn load(
-        land_polygons: &Path,
-        osm_water: Option<&Path>,
-        lines: &[Vec<LatLon>],
-    ) -> Result<Self, OracleError> {
+    /// Loads the sources, keeping only polygons near `lines` (the lines to
+    /// be checked later).
+    pub fn load(sources: OracleSources<'_>, lines: &[Vec<LatLon>]) -> Result<Self, OracleError> {
+        let OracleSources {
+            land_polygons,
+            osm_water,
+            passages,
+            overrides,
+        } = sources;
         let corridor = corridor(lines, 0.05);
         let err = |path: &Path, e: &dyn std::fmt::Display| OracleError::Read {
             path: path.display().to_string(),
@@ -350,6 +405,32 @@ impl VectorOracle {
                 if is_water && near_corridor(&corridor, &feature.geometry) {
                     water.add_geometry(&feature.geometry);
                 }
+            }
+        }
+        if let Some(path) = passages {
+            for p in curated::load_passages(path).map_err(|e| err(path, &e))? {
+                for f in &p.features {
+                    match &f.corridor {
+                        Corridor::Line { line, width_m } => {
+                            for l in &line.0 {
+                                let pts: Vec<[f64; 2]> = l.0.iter().map(|c| [c.x, c.y]).collect();
+                                for poly in corridor_polygons(&pts, *width_m) {
+                                    water.add(&poly);
+                                }
+                            }
+                        }
+                        Corridor::Area(area) => area.iter().for_each(|poly| water.add(poly)),
+                    }
+                }
+            }
+        }
+        if let Some(path) = overrides {
+            for o in curated::load_overrides(path).map_err(|e| err(path, &e))? {
+                let target = match o.effect {
+                    OverrideEffect::ForceNavigable => &mut water,
+                    OverrideEffect::ForceBlocked => &mut land,
+                };
+                o.area.iter().for_each(|poly| target.add(poly));
             }
         }
         Ok(Self {
@@ -456,6 +537,22 @@ mod tests {
         assert!(!idx.contains([5.0, 5.0]));
         assert!(idx.crosses([0.5, -1.0], [0.5, 0.1]));
         assert!(!idx.crosses([1.2, -1.0], [1.8, 2.0]));
+    }
+
+    #[test]
+    fn corridors_cover_their_centre_line() {
+        let line = [[10.0, 50.0], [10.01, 50.0], [10.01, 50.01]];
+        let mut b = PolygonIndexBuilder::default();
+        for p in corridor_polygons(&line, 40.0) {
+            b.add(&p);
+        }
+        let idx = b.build();
+        // 15 m off the centre line is inside, 25 m is not (lat degree ~111 km).
+        let m = 1.0 / 111_195.0;
+        assert!(idx.contains([10.005, 50.0 + 15.0 * m]));
+        assert!(!idx.contains([10.005, 50.0 + 25.0 * m]));
+        // The joint is covered.
+        assert!(idx.contains([10.01 + 10.0 * m / 0.64, 50.0 - 5.0 * m]));
     }
 
     #[test]

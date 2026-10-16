@@ -92,8 +92,12 @@ const RELAX_BISECTIONS: u32 = 8;
 /// Slides shorter than this (metres) don't count as progress.
 const MIN_RELAX_MOVE_M: f64 = 0.5;
 
-/// Most midpoints inserted into one segment by the rounding pass.
-const MAX_ROUNDING_SPLITS: usize = 32;
+/// Midpoints the rounding pass tries per point.
+const ROUNDING_BISECTIONS: u32 = 64;
+
+/// Visible lines keep this margin (metres) to cells they may not enter,
+/// more than rounding to 1e-6° moves a point (at most ~6 cm).
+const ROUNDING_MARGIN_M: f64 = 0.1;
 
 /// A point rounded to the 1e-6° output lattice, with its unit vector.
 #[derive(Clone, Copy, Debug)]
@@ -154,17 +158,37 @@ impl Smoother<'_, '_> {
 
     /// Whether the arc `from`–`to` may replace the path between indices
     /// `first` and `last`, with the clearance lowered by `slack` metres.
+    ///
+    /// The arcs offset by ±[`ROUNDING_MARGIN_M`] to either side must pass
+    /// too. A cell traversal ignores cells the arc only touches, so without
+    /// them a line could pass exactly through the corner where two water
+    /// cells meet diagonally next to land, and no rounded line could follow
+    /// it.
     fn visible(&self, from: Point3, to: Point3, first: usize, last: usize, slack: f64) -> bool {
         let (lo, hi) = (first.min(last), first.max(last));
         let clearance = (self.clearance(lo, hi) - slack).max(0.0);
         let graph = self.graph;
-        walk_arc(graph.cells(), graph.max_level(), from, to, |index| {
-            #[expect(clippy::cast_possible_truncation, reason = "node counts fit in u32")]
-            let node = NodeId(index as u32);
-            self.filter.allows_node(graph, node)
-                && (self.pos.get(&node.0).is_some_and(|k| (lo..=hi).contains(k))
-                    || f64::from(graph.shore_m(node)) >= clearance)
-        })
+        let walk = |a: Point3, b: Point3| {
+            walk_arc(graph.cells(), graph.max_level(), a, b, |index| {
+                #[expect(clippy::cast_possible_truncation, reason = "node counts fit in u32")]
+                let node = NodeId(index as u32);
+                self.filter.allows_node(graph, node)
+                    && (self.pos.get(&node.0).is_some_and(|k| (lo..=hi).contains(k))
+                        || f64::from(graph.shore_m(node)) >= clearance)
+            })
+        };
+        if !walk(from, to) {
+            return false;
+        }
+        let normal = from.cross(to);
+        if normal.norm() == 0.0 {
+            return true;
+        }
+        let side = normal
+            .normalize()
+            .scale(ROUNDING_MARGIN_M / EARTH_MEAN_RADIUS_M);
+        let shift = |p: Point3, s: f64| (p + side.scale(s)).normalize();
+        walk(shift(from, 1.0), shift(to, 1.0)) && walk(shift(from, -1.0), shift(to, -1.0))
     }
 
     /// Greedy string pulling over the anchors.
@@ -405,56 +429,86 @@ impl Smoother<'_, '_> {
         out.into_iter().map(|(_, r)| r).collect()
     }
 
+    /// Places the rounded point for `src` after `prev`: the first candidate
+    /// (the plain rounding, then lattice neighbours "towards water") whose
+    /// segment from `prev` passes, with clearance if possible, else the
+    /// plain land rule. `fixed` allows only the plain rounding.
+    fn place(
+        &self,
+        prev: Rounded,
+        src: Point3,
+        range: (usize, usize),
+        slack: f64,
+        fixed: bool,
+    ) -> Option<Rounded> {
+        let plain = Rounded::of_point(src);
+        let mut candidates = vec![plain];
+        if !fixed {
+            candidates.extend(self.lattice_candidates(src));
+        }
+        [true, false].into_iter().find_map(|strict| {
+            candidates
+                .iter()
+                .copied()
+                .find(|c| self.rounded_ok(prev.p, c.p, range, slack, strict))
+        })
+    }
+
     /// Rounds the line to the output lattice so that every rounded segment
     /// passes the checks (see the module docs). The ends are kept as
     /// rounded.
+    ///
+    /// A segment that fails as rounded is bisected: midpoints of the
+    /// unrounded segment are rounded in turn. Visible lines keep a margin of
+    /// [`ROUNDING_MARGIN_M`] to cells they may not enter, so this is rare
+    /// (raw graph edges between path cells have no margin). The work is
+    /// bounded, so it stays linear in the number of points.
     fn round(&self, line: &[LinePoint], slack: f64) -> Vec<LatLon> {
         let last = line.len() - 1;
         let first = Rounded::of_point(line[0].p);
         let mut out = vec![first.ll];
         // The previous output vertex and the unrounded point it stands for.
-        let (mut prev, mut prev_src) = (first, line[0].p);
+        let mut prev = (first, line[0].p);
         for (k, target) in line.iter().enumerate().skip(1) {
-            // Pending points of this segment, last one first.
-            let mut pending = vec![target.p];
-            let mut splits = 0;
-            while let Some(&src) = pending.last() {
-                let is_end = k == last && pending.len() == 1;
-                let plain = Rounded::of_point(src);
-                let candidates = if is_end {
-                    vec![plain]
-                } else {
-                    let mut c = vec![plain];
-                    c.extend(self.lattice_candidates(src));
-                    c
-                };
-                let pick = [true, false].into_iter().find_map(|strict| {
-                    candidates
-                        .iter()
-                        .find(|c| self.rounded_ok(prev.p, c.p, target.range, slack, strict))
-                });
-                match pick {
-                    Some(&c) => {
-                        out.push(c.ll);
-                        (prev, prev_src) = (c, src);
-                        pending.pop();
-                    }
-                    None if splits < MAX_ROUNDING_SPLITS => {
-                        // Split the (unrounded) segment and round the halves.
-                        let mid = move_towards(prev_src, src, prev_src.angle(src) / 2.0);
-                        pending.push(mid);
-                        splits += 1;
-                    }
-                    None => {
-                        // Not seen in practice; keep the plain rounding.
-                        out.push(plain.ll);
-                        (prev, prev_src) = (plain, src);
-                        pending.pop();
-                    }
-                }
+            let fixed = k == last;
+            if !self.bisect_to(&mut out, &mut prev, target.p, target.range, slack, fixed) {
+                // Not seen in practice; keep the plain rounding.
+                let plain = Rounded::of_point(target.p);
+                out.push(plain.ll);
+                prev = (plain, target.p);
             }
         }
         out
+    }
+
+    /// Places `target` after `prev`, inserting rounded midpoints of the
+    /// unrounded segment where needed (at most [`ROUNDING_BISECTIONS`]
+    /// attempts). Returns whether `target` was placed; points placed on the
+    /// way stay in `out`.
+    fn bisect_to(
+        &self,
+        out: &mut Vec<LatLon>,
+        prev: &mut (Rounded, Point3),
+        target: Point3,
+        range: (usize, usize),
+        slack: f64,
+        fixed: bool,
+    ) -> bool {
+        let mut goal = target;
+        for _ in 0..=ROUNDING_BISECTIONS {
+            let is_target = goal == target;
+            if let Some(c) = self.place(prev.0, goal, range, slack, fixed && is_target) {
+                out.push(c.ll);
+                *prev = (c, goal);
+                if is_target {
+                    return true;
+                }
+                goal = target;
+            } else {
+                goal = move_towards(prev.1, goal, prev.1.angle(goal) / 2.0);
+            }
+        }
+        false
     }
 }
 

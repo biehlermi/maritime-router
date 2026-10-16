@@ -1,11 +1,314 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>maritime-router viewer</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>maritime-router viewer</title>
+<!--
+  Static viewer for the acceptance results written by
+    maritime-router-cli test --data <file> testdata/cases.yaml --out results/
+  Serve the repository root over HTTP (browsers don't fetch files from file://):
+    python3 -m http.server 8000
+  then open http://localhost:8000/viewer/ (results are read from ../results/;
+  use ?results=<path>/ for another directory).
+-->
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@6.14.0/dist/maplibre-gl.css">
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --text: #1d2125; --muted: #5f6b76; --line: #dde1e4;
+    --pass: #1f7a3d; --pass-bg: #e3f3e8; --fail: #b3261e; --fail-bg: #fbe5e3;
+    --skip: #7a6400; --skip-bg: #f8f1d2; --accent: #1f5fbf; --sel: #e8f0fc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #15181b; --panel: #1d2125; --text: #e6e8ea; --muted: #9aa5ae; --line: #33393f;
+      --pass: #7fd39a; --pass-bg: #1d3526; --fail: #ff9a90; --fail-bg: #3f1f1c;
+      --skip: #e6cf6a; --skip-bg: #3a3218; --accent: #8db7ff; --sel: #243247;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #app { display: grid; grid-template-columns: 380px 1fr; height: 100%; }
+  #side { display: flex; flex-direction: column; min-height: 0; background: var(--panel);
+    border-right: 1px solid var(--line); }
+  header { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0 0 4px; font-size: 16px; }
+  header .meta { color: var(--muted); font-size: 12px; }
+  .totals { margin-top: 6px; font-weight: 600; }
+  .controls { margin-top: 8px; display: flex; gap: 12px; font-size: 12px; color: var(--muted); }
+  #cases { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 0 1 auto; max-height: 45%; }
+  #cases li { padding: 8px 14px; border-bottom: 1px solid var(--line); cursor: pointer;
+    display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; }
+  #cases li:hover { background: var(--sel); }
+  #cases li.sel { background: var(--sel); box-shadow: inset 3px 0 var(--accent); }
+  #cases .title { font-weight: 600; }
+  #cases .sub { color: var(--muted); font-size: 12px; grid-column: 1 / -1; }
+  .badge { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 9px; align-self: start; }
+  .badge.pass { color: var(--pass); background: var(--pass-bg); }
+  .badge.fail { color: var(--fail); background: var(--fail-bg); }
+  .badge.skip { color: var(--skip); background: var(--skip-bg); }
+  #details { padding: 12px 14px; overflow-y: auto; flex: 1 1 auto; border-top: 1px solid var(--line); }
+  #details h2 { margin: 0 0 6px; font-size: 15px; }
+  #details p { margin: 4px 0; }
+  #details .muted { color: var(--muted); font-size: 12px; }
+  #details table { border-collapse: collapse; width: 100%; font-size: 12px; margin: 6px 0; }
+  #details td, #details th { border-bottom: 1px solid var(--line); padding: 3px 4px; text-align: left; vertical-align: top; }
+  #details th { color: var(--muted); font-weight: 600; }
+  .num { text-align: right !important; font-variant-numeric: tabular-nums; }
+  #map { height: 100%; }
+  .legend { position: absolute; bottom: 30px; right: 10px; background: var(--panel); color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font-size: 12px; line-height: 1.6; }
+  .legend i { display: inline-block; width: 18px; height: 0; vertical-align: middle; margin-right: 6px; border-top: 3px solid; }
+  .legend i.dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid; margin-right: 10px; }
+  #error { color: var(--fail); padding: 12px 14px; }
+  @media (max-width: 760px) {
+    #app { grid-template-columns: 1fr; grid-template-rows: 55% 45%; }
+    #side { order: 2; border-right: 0; border-top: 1px solid var(--line); }
+    #map { order: 1; }
+    .legend { display: none; }
+  }
+</style>
 </head>
 <body>
-  <p>Route viewer: coming in Phase 1.</p>
+<div id="app">
+  <aside id="side">
+    <header>
+      <h1>maritime-router acceptance results</h1>
+      <div class="meta" id="meta">loading…</div>
+      <div class="totals" id="totals"></div>
+      <div class="controls">
+        <label><input type="checkbox" id="showAll"> all routes</label>
+        <label><input type="checkbox" id="showExpect" checked> expectations</label>
+      </div>
+    </header>
+    <ul id="cases"></ul>
+    <section id="details"><p class="muted">Select a case.</p></section>
+  </aside>
+  <div style="position: relative">
+    <div id="map"></div>
+    <div class="legend">
+      <div><i style="border-color:#1f5fbf"></i>route (water part)</div>
+      <div><i style="border-color:#d6249f;border-top-width:6px"></i>passage</div>
+      <div><i style="border-color:#555;border-top-style:dashed"></i>snap connector</div>
+      <div><i class="dot" style="border-color:#111;background:#111"></i>waypoint</div>
+      <div><i class="dot" style="border-color:#1f5fbf;background:#fff"></i>snapped point</div>
+      <div><i class="dot" style="border-color:#1f7a3d"></i>passes near (pass / <span style="color:#b3261e">fail</span>)</div>
+      <div><i class="dot" style="border-color:#e8590c;background:#e8590c"></i>found on land</div>
+    </div>
+  </div>
+</div>
+<script type="module">
+// MapLibre GL JS 6 is published as an ES module only.
+import * as maplibregl from "https://unpkg.com/maplibre-gl@6.14.0/dist/maplibre-gl.mjs";
+
+const params = new URLSearchParams(location.search);
+// A map position in the URL (#zoom/lat/lon) wins over fitting the first case.
+const initialHash = location.hash;
+const base = params.get("results") || "../results/";
+const state = { summary: null, selected: null, cache: new Map() };
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmt = (v, d = 2) => (v === null || v === undefined ? "–" : Number(v).toFixed(d));
+
+const map = new maplibregl.Map({
+  container: "map",
+  style: {
+    version: 8,
+    sources: {
+      osm: {
+        type: "raster",
+        tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+        tileSize: 256,
+        maxzoom: 19,
+        attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      },
+    },
+    layers: [{ id: "osm", type: "raster", source: "osm" }],
+  },
+  center: [5, 55],
+  zoom: 3.5,
+  hash: true,
+});
+map.addControl(new maplibregl.NavigationControl(), "top-right");
+map.addControl(new maplibregl.ScaleControl({ unit: "nautical" }), "bottom-left");
+
+/** A circle of `radius` metres around [lon, lat] as a polygon ring. */
+function circle(center, radius, n = 64) {
+  const [lon, lat] = center;
+  const R = 6371008.8, ring = [];
+  for (let k = 0; k <= n; k++) {
+    const a = (2 * Math.PI * k) / n;
+    const dLat = (radius * Math.cos(a)) / R;
+    const dLon = (radius * Math.sin(a)) / (R * Math.cos((lat * Math.PI) / 180));
+    ring.push([lon + (dLon * 180) / Math.PI, lat + (dLat * 180) / Math.PI]);
+  }
+  return ring;
+}
+
+/** Expectation circles become polygons so they scale with the map. */
+function withCircles(fc) {
+  const out = [];
+  for (const f of fc.features) {
+    const p = f.properties;
+    if ((p.kind === "near" || p.kind === "avoid") && f.geometry.type === "Point") {
+      out.push({ type: "Feature", properties: p, geometry: { type: "Polygon", coordinates: [circle(f.geometry.coordinates, p.radius_m)] } });
+    } else {
+      out.push(f);
+    }
+  }
+  return { type: "FeatureCollection", features: out };
+}
+
+const empty = { type: "FeatureCollection", features: [] };
+map.on("load", () => {
+  map.addSource("all", { type: "geojson", data: empty });
+  map.addSource("case", { type: "geojson", data: empty });
+  map.addLayer({ id: "all-routes", type: "line", source: "all",
+    filter: ["==", ["get", "kind"], "route"],
+    paint: { "line-color": ["case", ["get", "passed"], "#1f5fbf", "#b3261e"], "line-width": 2, "line-opacity": 0.6 } });
+  map.addLayer({ id: "expect-fill", type: "fill", source: "case",
+    filter: ["in", ["get", "kind"], ["literal", ["near", "avoid"]]],
+    paint: { "fill-color": ["case", ["==", ["get", "kind"], "avoid"], "#b3261e", ["case", ["get", "passed"], "#1f7a3d", "#b3261e"]], "fill-opacity": 0.08 } });
+  map.addLayer({ id: "expect-line", type: "line", source: "case",
+    filter: ["in", ["get", "kind"], ["literal", ["near", "avoid"]]],
+    paint: { "line-color": ["case", ["==", ["get", "kind"], "avoid"], "#b3261e", ["case", ["get", "passed"], "#1f7a3d", "#b3261e"]], "line-width": 1.5, "line-dasharray": [3, 2] } });
+  map.addLayer({ id: "connector", type: "line", source: "case",
+    filter: ["==", ["get", "kind"], "connector"],
+    paint: { "line-color": "#555", "line-width": 2, "line-dasharray": [2, 2] } });
+  map.addLayer({ id: "route", type: "line", source: "case",
+    filter: ["==", ["get", "kind"], "route"],
+    layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": "#1f5fbf", "line-width": ["interpolate", ["linear"], ["zoom"], 4, 2.5, 14, 4] } });
+  map.addLayer({ id: "passage", type: "line", source: "case",
+    filter: ["==", ["get", "kind"], "passage"],
+    layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": "#d6249f", "line-width": ["interpolate", ["linear"], ["zoom"], 4, 5, 14, 8], "line-opacity": 0.75 } });
+  map.addLayer({ id: "waypoint", type: "circle", source: "case",
+    filter: ["==", ["get", "kind"], "waypoint"],
+    paint: { "circle-radius": 5, "circle-color": "#111", "circle-stroke-color": "#fff", "circle-stroke-width": 1.5 } });
+  map.addLayer({ id: "snap", type: "circle", source: "case",
+    filter: ["==", ["get", "kind"], "snap"],
+    paint: { "circle-radius": 4, "circle-color": "#fff", "circle-stroke-color": "#1f5fbf", "circle-stroke-width": 2 } });
+  map.addLayer({ id: "land", type: "circle", source: "case",
+    filter: ["==", ["get", "kind"], "land"],
+    paint: { "circle-radius": 6, "circle-color": "#e8590c", "circle-stroke-color": "#fff", "circle-stroke-width": 1 } });
+  for (const id of ["waypoint", "snap", "route", "passage", "land", "connector"]) {
+    map.on("click", id, (e) => {
+      const p = e.features[0].properties;
+      const rows = Object.entries(p).map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join("");
+      new maplibregl.Popup().setLngLat(e.lngLat).setHTML(`<table>${rows}</table>`).addTo(map);
+    });
+    map.on("mouseenter", id, () => (map.getCanvas().style.cursor = "pointer"));
+    map.on("mouseleave", id, () => (map.getCanvas().style.cursor = ""));
+  }
+  load();
+});
+
+async function fetchJson(path) {
+  if (state.cache.has(path)) return state.cache.get(path);
+  const r = await fetch(base + path);
+  if (!r.ok) throw new Error(`${base + path}: HTTP ${r.status}`);
+  const v = await r.json();
+  state.cache.set(path, v);
+  return v;
+}
+
+function badge(r) {
+  return r.passed ? '<span class="badge pass">pass</span>' : '<span class="badge fail">FAIL</span>';
+}
+
+async function load() {
+  try {
+    const s = await fetchJson("summary.json");
+    state.summary = s;
+    $("meta").textContent = `${s.data.file} · data ${s.data.data_version} · engine ${s.data.engine_version} · ${s.data.nodes.toLocaleString()} nodes · run ${s.generated}${s.oracle ? "" : " · vector oracle skipped"}`;
+    $("totals").innerHTML = `${s.totals.passed} of ${s.totals.cases} cases pass`;
+    const list = $("cases");
+    list.innerHTML = "";
+    s.cases.forEach((c, i) => {
+      const li = document.createElement("li");
+      li.dataset.index = i;
+      const dist = c.distance_nm !== null ? `${fmt(c.distance_nm)} nm` : esc(c.error);
+      const dev = c.deviation_pct !== null && c.deviation_pct !== undefined ? ` · ${c.deviation_pct > 0 ? "+" : ""}${fmt(c.deviation_pct, 1)} % vs ${fmt(c.reference_nm, 0)} nm` : "";
+      li.innerHTML = `<span class="title">${c.spec_case ? c.spec_case + ". " : ""}${esc(c.title)}</span>${badge(c)}<span class="sub">${dist}${dev} · ${fmt(c.time_ms, 1)} ms</span>`;
+      li.onclick = () => select(i);
+      list.appendChild(li);
+    });
+    const want = params.get("case");
+    const start = Math.max(0, s.cases.findIndex((c) => c.id === want));
+    if (s.cases.length) select(start, !initialHash);
+  } catch (e) {
+    $("meta").textContent = "";
+    $("details").innerHTML = `<div id="error">Could not load results: ${esc(e.message)}.<br>Serve the repository root over HTTP and run the acceptance cases into results/ first (see the comment at the top of this file).</div>`;
+  }
+}
+
+function bounds(fc) {
+  const b = new maplibregl.LngLatBounds();
+  for (const f of fc.features) {
+    const k = f.properties.kind;
+    if (k !== "route" && k !== "waypoint" && k !== "connector") continue;
+    const g = f.geometry;
+    const pts = g.type === "Point" ? [g.coordinates] : g.type === "LineString" ? g.coordinates : g.coordinates.flat();
+    for (const p of pts) b.extend(p);
+  }
+  return b;
+}
+
+async function select(i, fit = true) {
+  const c = state.summary.cases[i];
+  state.selected = i;
+  document.querySelectorAll("#cases li").forEach((li) => li.classList.toggle("sel", Number(li.dataset.index) === i));
+  document.querySelector(`#cases li[data-index="${i}"]`)?.scrollIntoView({ block: "nearest" });
+  renderDetails(c);
+  const fc = await fetchJson(c.file);
+  const shown = $("showExpect").checked ? withCircles(fc) : { type: "FeatureCollection", features: fc.features.filter((f) => !["near", "avoid"].includes(f.properties.kind)) };
+  map.getSource("case").setData(shown);
+  const b = bounds(fc);
+  if (fit && !b.isEmpty()) map.fitBounds(b, { padding: 60, maxZoom: 14, duration: 600 });
+  const u = new URL(location.href);
+  u.searchParams.set("case", c.id);
+  history.replaceState(null, "", u);
+}
+
+function renderDetails(c) {
+  const checks = c.checks.map((k) => {
+    const cls = k.skipped ? "skip" : k.passed ? "pass" : "fail";
+    return `<tr><td><span class="badge ${cls}">${k.skipped ? "skip" : k.passed ? "pass" : "FAIL"}</span></td><td>${esc(k.name)}</td><td>${esc(k.detail)}</td></tr>`;
+  }).join("");
+  const legs = c.legs.map((l) => `<tr><td>${l.from}→${l.to}</td><td class="num">${fmt(l.distance_nm)}</td><td>${esc(l.passages.join(", ") || "–")}</td><td class="num">${fmt(l.snap_start_m, 0)} / ${fmt(l.snap_end_m, 0)}</td></tr>`).join("");
+  const ref = c.reference_nm !== null && c.reference_nm !== undefined
+    ? `<p><b>Reference:</b> ${fmt(c.reference_nm, 0)} nm (${esc(c.reference)}). <span class="muted">Measures: ${esc(c.reference_measures)}</span></p>
+       <p><b>Deviation:</b> ${c.deviation_pct > 0 ? "+" : ""}${fmt(c.deviation_pct, 1)} % (tolerance ±${fmt(c.tolerance_pct, 0)} %)</p>` : "";
+  $("details").innerHTML = `
+    <h2>${c.spec_case ? c.spec_case + ". " : ""}${esc(c.title)} ${badge(c)}</h2>
+    ${c.description ? `<p class="muted">${esc(c.description)}</p>` : ""}
+    <p><b>Distance:</b> ${c.distance_nm !== null ? `${fmt(c.distance_nm)} nm (${fmt(c.distance_km)} km)` : esc(c.error)}
+       · <b>time</b> ${fmt(c.time_ms, 1)} ms (again ${fmt(c.time_warm_ms, 1)} ms)</p>
+    ${ref}
+    <table><tr><th></th><th>check</th><th>result</th></tr>${checks}</table>
+    ${legs ? `<table><tr><th>leg</th><th class="num">nm</th><th>passages</th><th class="num">snap m (start / end)</th></tr>${legs}</table>` : ""}
+    ${c.warnings.length ? `<p class="muted">Warnings: ${c.warnings.map(esc).join("; ")}</p>` : ""}`;
+}
+
+$("showExpect").onchange = () => state.selected !== null && select(state.selected, false);
+$("showAll").onchange = async (e) => {
+  if (!e.target.checked) { map.getSource("all").setData(empty); return; }
+  const features = [];
+  for (const c of state.summary.cases) {
+    if (c.distance_nm === null) continue;
+    const fc = await fetchJson(c.file);
+    for (const f of fc.features) if (f.properties.kind === "route") features.push({ ...f, properties: { ...f.properties, passed: c.passed } });
+  }
+  map.getSource("all").setData({ type: "FeatureCollection", features });
+};
+document.addEventListener("keydown", (e) => {
+  if (!state.summary || state.selected === null || e.target.tagName === "INPUT") return;
+  const n = state.summary.cases.length;
+  if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); select((state.selected + 1) % n); }
+  if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); select((state.selected - 1 + n) % n); }
+});
+</script>
 </body>
 </html>

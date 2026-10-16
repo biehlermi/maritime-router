@@ -6,7 +6,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use maritime_router_acceptance::cases::CaseFile;
-use maritime_router_acceptance::land::VectorOracle;
+use maritime_router_acceptance::land::{OracleSources, VectorOracle};
 use maritime_router_acceptance::output::{
     case_geojson, collection, route_features, summary_markdown,
 };
@@ -80,6 +80,12 @@ struct TestArgs {
     /// The filtered OSM file whose inland water the oracle treats as water.
     #[arg(long, default_value = "sources/osm-filtered.geojsonseq")]
     osm_water: PathBuf,
+    /// The passage corridors the oracle treats as water.
+    #[arg(long, default_value = "data/passages.geojson")]
+    passages: PathBuf,
+    /// The overrides the oracle applies.
+    #[arg(long, default_value = "data/overrides.geojson")]
+    overrides: PathBuf,
     /// Skip the vector land oracle.
     #[arg(long)]
     no_oracle: bool,
@@ -221,7 +227,15 @@ fn load_oracle(args: &TestArgs, runs: &[CaseRun]) -> Result<Option<VectorOracle>
                 args.osm_water.display()
             );
         }
-        let oracle = VectorOracle::load(&args.land_polygons, osm, &lines)?;
+        let oracle = VectorOracle::load(
+            OracleSources {
+                land_polygons: &args.land_polygons,
+                osm_water: osm,
+                passages: args.passages.exists().then_some(args.passages.as_path()),
+                overrides: args.overrides.exists().then_some(args.overrides.as_path()),
+            },
+            &lines,
+        )?;
         let (land, water) = oracle.counts();
         eprintln!(
             "vector oracle: {land} land polygons, {water} inland water areas near the routes ({:.1} s)",
