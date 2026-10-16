@@ -198,7 +198,10 @@ fn unconnected_sea_is_no_route() {
         f.world.marker('B'),
         f.world.marker('C'),
     ];
-    let err = f.router.route(&request(&pts)).unwrap_err();
+    // Within 1 km of C there is only the enclosed sea.
+    let mut req = request(&pts);
+    req.max_snap_distance_m = Some(1_000.0);
+    let err = f.router.route(&req).unwrap_err();
     assert_eq!(
         err,
         RouteError::NoRoute {
@@ -208,6 +211,55 @@ fn unconnected_sea_is_no_route() {
         }
     );
     assert_eq!(err.code(), "no_route");
+}
+
+#[test]
+fn end_in_a_cut_off_basin_moves_to_the_shared_component() {
+    // C lies in an enclosed sea (its own component) about 2 km from the
+    // channel. With the default 5 km snap distance the leg moves C's snap
+    // into the component of B instead of failing with no_route.
+    let f = archipelago();
+    let graph = f.router.model().graph();
+    let (b, c) = (f.world.marker('B'), f.world.marker('C'));
+    let comp = |p: LatLon| graph.component(graph.locate_point(p).unwrap());
+    assert_ne!(comp(b), comp(c));
+    let r = route(f, &[b, c]);
+    assert_valid(f, &r, &[b, c]);
+    let end = r.legs[0].snap.end;
+    assert_eq!(comp(end.point), comp(b));
+    assert!(
+        end.distance_m > 500.0 && end.distance_m < 5_000.0,
+        "{end:?}"
+    );
+    assert_eq!(r.warnings.len(), 1);
+    assert_eq!(r.warnings[0].waypoint, Some(1));
+    // Symmetric: the same snap and distance the other way round.
+    let back = route(f, &[c, b]);
+    assert_eq!(back.legs[0].snap.start, end);
+    assert!((back.distance.metres - r.distance.metres).abs() < 1e-3);
+    // Both ends in the enclosed sea: no move needed.
+    let inside = f.world.point(28, 43);
+    let r = route(f, &[inside, c]);
+    assert_eq!(r.legs[0].snap.end.distance_m, 0.0);
+}
+
+#[test]
+fn largest_shared_component_wins() {
+    use maritime_router_core::route::{PassageFilter, components_near};
+    let f = archipelago();
+    let g = f.router.model().graph();
+    let filter = PassageFilter::defaults(g.passages());
+    let c = f.world.marker('C');
+    let near = components_near(&g, c, &filter, 5_000.0);
+    let main = g.component(g.locate_point(f.world.marker('A')).unwrap());
+    let enclosed = g.component(g.locate_point(c).unwrap());
+    assert_eq!(near, {
+        let mut v = vec![main, enclosed];
+        v.sort_unstable();
+        v
+    });
+    assert!(g.component_size(main) > g.component_size(enclosed));
+    assert_eq!(components_near(&g, c, &filter, 300.0), vec![enclosed]);
 }
 
 #[test]
@@ -558,5 +610,47 @@ proptest! {
         let pts = [f.world.point(a.0, a.1), f.world.point(b.0, b.1)];
         let r = route(f, &pts);
         assert_valid(f, &r, &pts);
+    }
+}
+
+fn islands() -> &'static Fixture {
+    static F: OnceLock<Fixture> = OnceLock::new();
+    F.get_or_init(|| fixture(synthetic::islands(96), RouterConfig::default()))
+}
+
+/// The returned coordinates (rounded to 1e-6°) themselves never enter land:
+/// every segment between the snapped points, sampled every metre, stays in
+/// water cells of the map. Lines along shore cells (clearance 0 next to the
+/// pier and the canal banks) graze cell edges, where rounding alone would
+/// tip them a few centimetres into land.
+fn assert_rounded_line_in_water(f: &Fixture, pts: &[LatLon]) {
+    let r = route(f, pts);
+    for leg in &r.legs {
+        let water = water_part(leg);
+        let land = f.world.first_land_sample(&water, 1.0);
+        assert!(
+            land.is_none(),
+            "{}: leg {} {:?} -> {:?} has a sample on land at {land:?}",
+            f.world.name(),
+            leg.from,
+            pts[leg.from],
+            pts[leg.to]
+        );
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(160))]
+
+    #[test]
+    fn rounded_lines_never_enter_land(world in 0usize..3, i in 0usize..100_000, j in 0usize..100_000, di in -0.45f64..0.45, dj in -0.45f64..0.45) {
+        let f = [pier(), archipelago(), islands()][world];
+        let water = if world == 1 { west_and_north_east_water() } else { f.world.water_cells() };
+        let (a, b) = (water[i % water.len()], water[j % water.len()]);
+        let size = f.world.cell_size_m() / 111_000.0;
+        let p = f.world.point(a.0, a.1);
+        let p = LatLon::new(p.lat + di * size, p.lon + dj * size);
+        let q = f.world.point(b.0, b.1);
+        assert_rounded_line_in_water(f, &[p, q]);
     }
 }

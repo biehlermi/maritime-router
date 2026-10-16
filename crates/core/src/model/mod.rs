@@ -250,6 +250,8 @@ pub struct Model {
     meta: GraphMeta,
     passages: Vec<PassageInfo>,
     max_level: u8,
+    /// Nodes per component ID (empty if the IDs are not dense).
+    comp_sizes: Vec<u32>,
 }
 
 impl Model {
@@ -264,11 +266,13 @@ impl Model {
         let passages: Vec<PassageInfo> = file.json(sections::PASSAGES)?;
         let raw = RawSections::from_file(&file)?;
         let max_level = validate::validate(&meta, &passages, &raw)?;
+        let comp_sizes = component_sizes(raw.comp);
         Ok(Self {
             file,
             meta,
             passages,
             max_level,
+            comp_sizes,
         })
     }
 
@@ -278,6 +282,7 @@ impl Model {
         // Every section was found and checked in `from_data_file`.
         let raw = RawSections::from_file(&self.file).unwrap_or_default();
         Graph::new(&self.meta, &self.passages, raw, self.max_level)
+            .with_component_sizes(&self.comp_sizes)
     }
 
     /// The underlying data file (header, other sections).
@@ -337,6 +342,20 @@ pub enum PointClass {
     Outside,
 }
 
+/// Nodes per component ID, or nothing if some ID is not below the node
+/// count (component IDs are normally numbered densely from 0).
+fn component_sizes(comp: &[u32]) -> Vec<u32> {
+    let n = comp.len();
+    if comp.iter().any(|&c| c as usize >= n) {
+        return Vec::new();
+    }
+    let mut sizes = vec![0u32; comp.iter().max().map_or(0, |&m| m as usize + 1)];
+    for &c in comp {
+        sizes[c as usize] += 1;
+    }
+    sizes
+}
+
 /// Zero-copy view of a validated graph. Obtain it from [`Model::graph`] or
 /// [`GraphSections::validate`].
 #[derive(Clone, Copy, Debug)]
@@ -345,6 +364,9 @@ pub struct Graph<'a> {
     passages: &'a [PassageInfo],
     raw: RawSections<'a>,
     max_level: u8,
+    /// Nodes per component, precomputed by [`Model`]; empty = count on
+    /// demand.
+    comp_sizes: &'a [u32],
 }
 
 /// Range of IDs in `cells` that lie inside `cell` (it and its descendants).
@@ -374,7 +396,13 @@ impl<'a> Graph<'a> {
             passages,
             raw,
             max_level,
+            comp_sizes: &[],
         }
+    }
+
+    fn with_component_sizes(mut self, sizes: &'a [u32]) -> Self {
+        self.comp_sizes = sizes;
+        self
     }
 
     /// Graph metadata.
@@ -438,6 +466,16 @@ impl<'a> Graph<'a> {
     /// The connected-component ID of a node.
     pub fn component(&self, n: NodeId) -> u32 {
         self.raw.comp[n.index()]
+    }
+
+    /// Number of nodes in component `c`. O(1) on a [`Model`]'s graph, a
+    /// scan over all nodes on in-memory sections.
+    pub fn component_size(&self, c: u32) -> u64 {
+        if self.comp_sizes.is_empty() {
+            self.raw.comp.iter().filter(|&&x| x == c).count() as u64
+        } else {
+            self.comp_sizes.get(c as usize).map_or(0, |&s| u64::from(s))
+        }
     }
 
     /// The node's shore distance in metres (lower bound over the cell).

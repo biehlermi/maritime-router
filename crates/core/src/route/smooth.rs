@@ -14,6 +14,17 @@
 //! 5. **Densify** along the WGS84 geodesic, re-checking every sub-segment;
 //!    a segment whose geodesic leaves the checked corridor is drawn along
 //!    its (checked) great circle instead.
+//! 6. **Rounding**: output coordinates are rounded to 1e-6°, which moves a
+//!    point by up to ~6 cm. A line grazing a cell edge could end up a few
+//!    centimetres inside land, so every segment is checked again **as
+//!    rounded**: with the visibility rule below, or failing that with the
+//!    plain land rule (only allowed navigable cells). If neither holds,
+//!    the vertex is nudged to a neighbouring point of the 1e-6° lattice
+//!    that makes the segment pass ("towards water"), and if no neighbour
+//!    does, the segment is split at its midpoint and both halves are
+//!    rounded the same way. The ends (the snapped points) stay put. So the
+//!    guarantee "never enters a non-navigable cell" holds for exactly the
+//!    coordinates returned.
 //!
 //! **Visibility** of a segment that replaces the path cells `a..=b`: the
 //! great-circle arc may only enter allowed navigable cells, and each cell
@@ -80,6 +91,38 @@ const RELAX_BISECTIONS: u32 = 8;
 
 /// Slides shorter than this (metres) don't count as progress.
 const MIN_RELAX_MOVE_M: f64 = 0.5;
+
+/// Most midpoints inserted into one segment by the rounding pass.
+const MAX_ROUNDING_SPLITS: usize = 32;
+
+/// A point rounded to the 1e-6° output lattice, with its unit vector.
+#[derive(Clone, Copy, Debug)]
+struct Rounded {
+    ll: LatLon,
+    p: Point3,
+}
+
+impl Rounded {
+    fn of(ll: LatLon) -> Self {
+        let ll = ll.rounded();
+        Self {
+            ll,
+            p: Point3::from_latlon(ll),
+        }
+    }
+
+    fn of_point(p: Point3) -> Self {
+        Self::of(p.to_latlon().normalized())
+    }
+}
+
+/// A point of the output line before rounding, with the path range of the
+/// segment that ends at it (for the visibility rule).
+#[derive(Clone, Copy, Debug)]
+struct LinePoint {
+    p: Point3,
+    range: (usize, usize),
+}
 
 /// A point of the line with the path index it stands for.
 #[derive(Clone, Copy, Debug)]
@@ -268,12 +311,15 @@ impl Smoother<'_, '_> {
         }
     }
 
-    /// Densifies along the geodesic with re-checks (longitudes in
-    /// [-180°, 180°]; unwrap them afterwards).
-    fn densify(&self, verts: &[Vertex], max_m: f64, fallback_m: f64, slack: f64) -> Vec<LatLon> {
-        let mut out = vec![verts[0].p.to_latlon()];
+    /// Densifies along the geodesic with re-checks.
+    fn densify(&self, verts: &[Vertex], max_m: f64, fallback_m: f64, slack: f64) -> Vec<LinePoint> {
+        let mut out = vec![LinePoint {
+            p: verts[0].p,
+            range: (verts[0].idx, verts[0].idx),
+        }];
         for w in verts.windows(2) {
             let (a, b) = (w[0], w[1]);
+            let range = (a.idx, b.idx);
             let pts = densify(&[a.p.to_latlon(), b.p.to_latlon()], max_m);
             let ok = pts.len() <= 2
                 || pts.windows(2).all(|s| {
@@ -286,7 +332,11 @@ impl Smoother<'_, '_> {
                     )
                 });
             if ok {
-                out.extend(pts[1..].iter().map(|p| p.normalized()));
+                let inner = &pts[1..pts.len().saturating_sub(1)];
+                out.extend(inner.iter().map(|&p| LinePoint {
+                    p: Point3::from_latlon(p),
+                    range,
+                }));
             } else {
                 // Points on the checked great circle.
                 let angle = a.p.angle(b.p);
@@ -301,9 +351,107 @@ impl Smoother<'_, '_> {
                 let parts = parts as u32;
                 for k in 1..parts {
                     let x = move_towards(a.p, b.p, angle * f64::from(k) / f64::from(parts));
-                    out.push(x.to_latlon());
+                    out.push(LinePoint { p: x, range });
                 }
-                out.push(b.p.to_latlon());
+            }
+            out.push(LinePoint { p: b.p, range });
+        }
+        out
+    }
+
+    /// Whether the rounded segment `a`–`b` only enters allowed navigable
+    /// cells, and with `strict` also keeps the clearance of `range`.
+    fn rounded_ok(
+        &self,
+        a: Point3,
+        b: Point3,
+        range: (usize, usize),
+        slack: f64,
+        strict: bool,
+    ) -> bool {
+        if strict {
+            return self.visible(a, b, range.0, range.1, slack);
+        }
+        let graph = self.graph;
+        walk_arc(graph.cells(), graph.max_level(), a, b, |index| {
+            #[expect(clippy::cast_possible_truncation, reason = "node counts fit in u32")]
+            self.filter.allows_node(graph, NodeId(index as u32))
+        })
+    }
+
+    /// Points of the 1e-6° lattice around `p` that lie in allowed water,
+    /// nearest first (the plain rounding comes first if it qualifies).
+    fn lattice_candidates(&self, p: Point3) -> Vec<Rounded> {
+        let ll = p.to_latlon().normalized();
+        let (lat0, lon0) = ((ll.lat * 1e6).floor(), (ll.lon * 1e6).floor());
+        let mut out: Vec<(f64, Rounded)> = Vec::with_capacity(16);
+        for i in -1..=2 {
+            for j in -1..=2 {
+                let q = LatLon::new((lat0 + f64::from(i)) / 1e6, (lon0 + f64::from(j)) / 1e6);
+                if !q.is_valid() {
+                    continue;
+                }
+                let r = Rounded::of(q);
+                let allowed = self
+                    .graph
+                    .locate(crate::grid::CellId::from_point(r.p))
+                    .is_some_and(|n| self.filter.allows_node(self.graph, n));
+                if allowed {
+                    out.push((r.p.angle(p), r));
+                }
+            }
+        }
+        out.sort_by(|x, y| x.0.total_cmp(&y.0));
+        out.into_iter().map(|(_, r)| r).collect()
+    }
+
+    /// Rounds the line to the output lattice so that every rounded segment
+    /// passes the checks (see the module docs). The ends are kept as
+    /// rounded.
+    fn round(&self, line: &[LinePoint], slack: f64) -> Vec<LatLon> {
+        let last = line.len() - 1;
+        let first = Rounded::of_point(line[0].p);
+        let mut out = vec![first.ll];
+        // The previous output vertex and the unrounded point it stands for.
+        let (mut prev, mut prev_src) = (first, line[0].p);
+        for (k, target) in line.iter().enumerate().skip(1) {
+            // Pending points of this segment, last one first.
+            let mut pending = vec![target.p];
+            let mut splits = 0;
+            while let Some(&src) = pending.last() {
+                let is_end = k == last && pending.len() == 1;
+                let plain = Rounded::of_point(src);
+                let candidates = if is_end {
+                    vec![plain]
+                } else {
+                    let mut c = vec![plain];
+                    c.extend(self.lattice_candidates(src));
+                    c
+                };
+                let pick = [true, false].into_iter().find_map(|strict| {
+                    candidates
+                        .iter()
+                        .find(|c| self.rounded_ok(prev.p, c.p, target.range, slack, strict))
+                });
+                match pick {
+                    Some(&c) => {
+                        out.push(c.ll);
+                        (prev, prev_src) = (c, src);
+                        pending.pop();
+                    }
+                    None if splits < MAX_ROUNDING_SPLITS => {
+                        // Split the (unrounded) segment and round the halves.
+                        let mid = move_towards(prev_src, src, prev_src.angle(src) / 2.0);
+                        pending.push(mid);
+                        splits += 1;
+                    }
+                    None => {
+                        // Not seen in practice; keep the plain rounding.
+                        out.push(plain.ll);
+                        (prev, prev_src) = (plain, src);
+                        pending.pop();
+                    }
+                }
             }
         }
         out
@@ -312,7 +460,8 @@ impl Smoother<'_, '_> {
 
 /// Smooths the cell path `path` from the snapped start `start` (inside the
 /// first cell) to the snapped end `end` (inside the last cell). Returns the
-/// line from `start` to `end`, densified, with longitudes in [-180°, 180°].
+/// line from `start` to `end`, densified and rounded to 1e-6°, with
+/// longitudes in [-180°, 180°].
 pub(crate) fn smooth(
     graph: &Graph<'_>,
     filter: &PassageFilter,
@@ -354,7 +503,7 @@ pub(crate) fn smooth(
     anchors.push(Vertex { p: end, idx: last });
     anchors.dedup_by(|b, a| a.p == b.p);
     if anchors.len() == 1 {
-        let p = start.to_latlon();
+        let p = Rounded::of_point(start).ll;
         return vec![p, p];
     }
 
@@ -366,10 +515,11 @@ pub(crate) fn smooth(
     } else {
         0.0
     };
-    smoother.densify(
+    let line = smoother.densify(
         &verts,
         config.densify_max_m,
         config.fallback_spacing_m,
         slack,
-    )
+    );
+    smoother.round(&line, slack)
 }
