@@ -33,17 +33,27 @@ pub enum SourceClass {
     Harbour = 4,
     /// Ferry terminals (areas or points), buffered by `ferry_terminal_buffer_m`.
     FerryTerminal = 5,
+    /// Tidal flats: areas that fall dry at low tide (`wetland=tidalflat`, and
+    /// shoals, sand and mud tagged `tidal=yes`). The coastline is at mean
+    /// high water, so they lie inside the sea polygons; they are not
+    /// navigable unless `exclude_tidal_flats` is off.
+    TidalFlat = 6,
+    /// Fairway centre lines (`waterway=fairway`): a corridor of
+    /// `tidal_fairway_width_m` along them stays open through tidal flats.
+    Fairway = 7,
 }
 
 impl SourceClass {
     /// All classes in declaration order.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::Sea,
         Self::Land,
         Self::InlandWater,
         Self::Lake,
         Self::Harbour,
         Self::FerryTerminal,
+        Self::TidalFlat,
+        Self::Fairway,
     ];
 
     /// Stable lower-case name, used in logs and statistics.
@@ -55,14 +65,21 @@ impl SourceClass {
             Self::Lake => "lake",
             Self::Harbour => "harbour",
             Self::FerryTerminal => "ferry_terminal",
+            Self::TidalFlat => "tidal_flat",
+            Self::Fairway => "fairway",
         }
+    }
+
+    /// Whether this class only makes sense for lines.
+    pub fn requires_line(self) -> bool {
+        self == Self::Fairway
     }
 
     /// Whether this class only makes sense for areas (not points or lines).
     pub fn requires_area(self) -> bool {
         matches!(
             self,
-            Self::Sea | Self::Land | Self::InlandWater | Self::Lake
+            Self::Sea | Self::Land | Self::InlandWater | Self::Lake | Self::TidalFlat
         )
     }
 }
@@ -138,7 +155,8 @@ pub struct SourceFeature {
     /// What the feature contributes. Never empty.
     pub classes: ClassSet,
     /// Geometry in WGS84 longitude/latitude degrees: `Point`, `MultiPoint`,
-    /// `Polygon` or `MultiPolygon`.
+    /// `Polygon` or `MultiPolygon`; `LineString` or `MultiLineString` for
+    /// fairways.
     pub geometry: Geometry<f64>,
 }
 

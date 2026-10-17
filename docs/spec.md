@@ -134,6 +134,12 @@ relying on them; the lists below are starting points.
    `seamark:type=harbour`, and `amenity=ferry_terminal` with a buffer. The
    preparation step can additionally take an optional list of extra points
    (latitude/longitude) that get the finest level too.
+4. **Tidal flats**: the coastline is at mean high water, so flats that fall
+   dry at low tide (the Wadden Sea) lie inside the water polygons. They are
+   blocked (`wetland=tidalflat`; `natural=shoal|sand|mud` with `tidal=yes`),
+   except along fairway lines (`waterway=fairway`), which keep a corridor
+   open to the harbours reached through tidal channels. Both are
+   configurable (`[water] exclude_tidal_flats`, `tidal_fairway_width_m`).
 
 Recommended tooling: `osmium-tool` for filtering the planet file (fast,
 well-proven), and Rust for everything after that. Avoid a hard GDAL

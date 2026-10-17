@@ -8,6 +8,7 @@
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     clippy::cast_precision_loss,
+    clippy::many_single_char_names,
     reason = "test helpers on small synthetic scenes"
 )]
 
@@ -141,6 +142,7 @@ fn raster_params() -> RasterParams {
         inland_min_width_m: 150.0,
         harbour_min_width_m: 30.0,
         include_lakes: false,
+        exclude_tidal_flats: true,
     }
 }
 
@@ -495,4 +497,197 @@ fn override_fills_a_gap_between_water_polygons() {
     let without = build(false);
     let g = without.validate().unwrap();
     assert_eq!(class_at(&g, 3000.0, 0.0), PointClass::Land);
+}
+
+/// Writes `sections` to a file in `dir` and opens a router on it.
+fn router_for(sections: &GraphSections, dir: &std::path::Path) -> Router {
+    let path = dir.join("scene.mrd");
+    let info = BuildInfo::new(1_792_000_000, 1_791_000_000, InputsHasher::new().finish());
+    build::write_file(&path, sections, info, &BuildReport::default()).unwrap();
+    let model = Model::open(
+        &path,
+        LoadOptions {
+            verify_checksums: true,
+            prewarm: false,
+        },
+    )
+    .unwrap();
+    Router::new(model, RouterConfig::default())
+}
+
+#[test]
+fn tidal_flats_leave_only_the_channel() {
+    // Sea west of the coast at x = 2000 (the coastline is at mean high
+    // water), covered from x = -3000 to the coast by two tidal flats that
+    // leave a 500 m channel along y = 0, like a harbour reached through a
+    // tidal channel. The harbour end of the channel must stay connected to
+    // the open sea, and routes must use the channel, not cross the flats.
+    let f = FRAME;
+    let build = |exclude_tidal_flats: bool| {
+        let mut b = SourceIndexBuilder::new(300.0, 300.0);
+        b.add_feature(&feature(
+            SourceClass::Sea,
+            f.rect(-8000.0, -5000.0, 2000.0, 5000.0).into(),
+        ));
+        for (y0, y1) in [(250.0, 4000.0), (-4000.0, -250.0)] {
+            b.add_feature(&feature(
+                SourceClass::TidalFlat,
+                f.rect(-3000.0, y0, 2200.0, y1).into(),
+            ));
+        }
+        let index = b.build();
+        let r = RasterParams {
+            exclude_tidal_flats,
+            ..raster_params()
+        };
+        let sw = f.coord(-7500.0, -4500.0);
+        let ne = f.coord(3000.0, 4500.0);
+        let tiles = tiles_for_region(r.tile_level, Some([sw.x, sw.y, ne.x, ne.y]));
+        build::build_graph(
+            &index,
+            &r,
+            &leaf_params(&r),
+            build::GraphParams {
+                min_sea_component_m2: 100_000.0,
+            },
+            &tiles,
+            GraphMeta::new("test"),
+            Vec::new(),
+            false,
+        )
+        .unwrap()
+        .0
+    };
+    let harbour = f.point(1500.0, 0.0);
+    let offshore = f.point(-6000.0, 3500.0);
+    let direct = maritime_router_core::geo::distance_m(harbour, offshore);
+    let dir = tempfile::tempdir().unwrap();
+
+    let sections = build(true);
+    let g = sections.validate().unwrap();
+    assert_eq!(class_at(&g, 0.0, 2000.0), PointClass::Land);
+    assert_eq!(class_at(&g, -2900.0, -1000.0), PointClass::Land);
+    let channel = node_at(&g, 0.0, 0.0);
+    assert_eq!(g.class(channel), WaterClass::Sea);
+    assert_eq!(g.component(channel), g.component(node_at(&g, -6000.0, 0.0)));
+    assert_eq!(g.component(channel), g.component(node_at(&g, 1500.0, 0.0)));
+
+    let router = router_for(&sections, dir.path());
+    let route = router
+        .route(&RouteRequest::new(vec![harbour, offshore]))
+        .unwrap();
+    let leg = &route.legs[0];
+    assert_no_land(&router, &leg.geometry.points());
+    // Out along the channel (y within ±250 m while x > -3000), then across
+    // open water from the flat's corner: at least 4.5 km + 4.4 km, against
+    // 8.3 km direct.
+    assert!(
+        leg.distance.metres > 8900.0 && leg.distance.metres > direct * 1.07,
+        "{} m vs {direct} m direct",
+        leg.distance.metres
+    );
+    let k = (1.0 / EARTH_MEAN_RADIUS_M).to_degrees();
+    for p in leg.geometry.points() {
+        let x = (p.lon - f.lon) / k * f.lat.to_radians().cos();
+        let y = (p.lat - f.lat) / k;
+        assert!(
+            x < -3000.0 || y.abs() < 250.0,
+            "({x:.0}, {y:.0}) is on a flat"
+        );
+    }
+
+    // Without the exclusion the flats are sea and the route goes straight.
+    let sections = build(false);
+    let g = sections.validate().unwrap();
+    assert!(matches!(class_at(&g, 0.0, 2000.0), PointClass::Water(_)));
+    let keep = dir.path().join("keep");
+    std::fs::create_dir(&keep).unwrap();
+    let router = router_for(&sections, &keep);
+    let leg = &router
+        .route(&RouteRequest::new(vec![harbour, offshore]))
+        .unwrap()
+        .legs[0];
+    assert!(
+        leg.distance.metres < direct * 1.05,
+        "{} m vs {direct} m direct",
+        leg.distance.metres
+    );
+}
+
+#[test]
+fn fairway_reaches_a_harbour_behind_a_flat() {
+    // A harbour basin (sea, inside a harbour area, so the finest raster
+    // level) at the coast behind a solid tidal flat 4.4 km wide, reached by a
+    // fairway that crosses the flat on a diagonal heading, like the buoyed
+    // channels to the Wadden Sea harbours.
+    let f = FRAME;
+    let build = |fairway_width_m: f64| {
+        let mut b = SourceIndexBuilder::new(300.0, 300.0).with_fairway_width(fairway_width_m);
+        b.add_feature(&feature(
+            SourceClass::Sea,
+            f.rect(-8000.0, -5000.0, 2000.0, 5000.0).into(),
+        ));
+        // The flat reaches past the coast and the sea's edges, with a hole
+        // for the basin.
+        let basin = f.rect(1400.0, -600.0, 2100.0, 600.0).exterior().clone();
+        let flat = Polygon::new(
+            f.rect(-3000.0, -6000.0, 2200.0, 6000.0).exterior().clone(),
+            vec![basin],
+        );
+        b.add_feature(&feature(SourceClass::TidalFlat, flat.into()));
+        b.add_feature(&feature(
+            SourceClass::Harbour,
+            f.rect(1400.0, -600.0, 2000.0, 600.0).into(),
+        ));
+        b.add_feature(&feature(
+            SourceClass::Fairway,
+            LineString(vec![
+                f.coord(-3500.0, -2500.0),
+                f.coord(-500.0, 500.0),
+                f.coord(1700.0, 0.0),
+            ])
+            .into(),
+        ));
+        let index = b.build();
+        let r = raster_params();
+        let sw = f.coord(-7500.0, -4500.0);
+        let ne = f.coord(3000.0, 4500.0);
+        let tiles = tiles_for_region(r.tile_level, Some([sw.x, sw.y, ne.x, ne.y]));
+        build::build_graph(
+            &index,
+            &r,
+            &leaf_params(&r),
+            build::GraphParams {
+                min_sea_component_m2: 100_000.0,
+            },
+            &tiles,
+            GraphMeta::new("test"),
+            Vec::new(),
+            false,
+        )
+        .unwrap()
+        .0
+    };
+    let sections = build(60.0);
+    let g = sections.validate().unwrap();
+    let harbour = node_at(&g, 1700.0, 0.0);
+    assert_eq!(g.class(harbour), WaterClass::Harbour);
+    assert_eq!(g.component(harbour), g.component(node_at(&g, -6000.0, 0.0)));
+    assert_eq!(class_at(&g, -500.0, 2000.0), PointClass::Land);
+    let dir = tempfile::tempdir().unwrap();
+    let router = router_for(&sections, dir.path());
+    let route = router
+        .route(&RouteRequest::new(vec![
+            f.point(1700.0, 0.0),
+            f.point(-6000.0, 0.0),
+        ]))
+        .unwrap();
+    assert!(route.legs[0].snap.start.distance_m < 1.0);
+    assert_no_land(&router, &route.legs[0].geometry.points());
+
+    // Without the fairway the basin is cut off. Its water is all harbour
+    // water, no sea, so it is dropped like a pond.
+    let sections = build(0.0);
+    let g = sections.validate().unwrap();
+    assert_eq!(class_at(&g, 1700.0, 0.0), PointClass::Land);
 }

@@ -125,7 +125,8 @@ fn attrs(p: Pixel) -> Option<(WaterClass, u8)> {
         | PixelClass::Shore
         | PixelClass::Narrow
         | PixelClass::Lake
-        | PixelClass::Blocked => return None,
+        | PixelClass::Blocked
+        | PixelClass::TidalFlat => return None,
     })
 }
 

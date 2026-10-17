@@ -1,0 +1,551 @@
+# Supporting cases: Wadden Sea harbours reached through tidal channels must
+# stay reachable when tidal flats are blocked ([water] exclude_tidal_flats).
+# Each case routes from a ferry terminal or harbour (OSM feature, Geofabrik
+# extracts of 2026-10-15) to open water outside the islands, with a snap
+# distance of at most 500 m, so a harbour whose channel the flats close fails
+# (no_water_nearby or no_route) instead of snapping kilometres away.
+#
+#   maritime-router-cli test --data phase1.mrd testdata/wadden-harbours.yaml --out results-wadden/
+#
+# Known failures on the Phase-1 build (no OSM fairway line to reopen them;
+# candidates for curated corridors or overrides):
+#   - Tönning: the Eider above the barrage is covered by tidal flats from bank to bank in OSM and has no fairway line.
+#   - Husum: no OSM fairway line leads to Husum (the nearest is 14 km away); the harbour basin was already 1.5 km from the model's water in PR 8.
+
+defaults:
+  distance_tolerance: 0.10
+
+cases:
+  - id: w01-den-helder
+    title: Den Helder (Veerhaven) → open sea
+    waypoints:
+      - name: Den Helder (Veerhaven)
+        lat: 52.9628
+        lon: 4.7780
+        source: OSM node 1328957096 amenity=ferry_terminal "Veerhaven Den Helder" (node position, rounded to 4 decimals)
+      - name: North Sea off Vlieland
+        lat: 53.55
+        lon: 4.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w02-texel
+    title: Texel ('t Horntje) → open sea
+    waypoints:
+      - name: Texel ('t Horntje)
+        lat: 53.0036
+        lon: 4.7813
+        source: OSM node 47742727 amenity=ferry_terminal "Veerhaven Texel" (node position, rounded to 4 decimals)
+      - name: North Sea off Vlieland
+        lat: 53.55
+        lon: 4.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w03-den-oever
+    title: Den Oever (Waddenhaven) → open sea
+    waypoints:
+      - name: Den Oever (Waddenhaven)
+        lat: 52.9405
+        lon: 5.0332
+        source: OSM way 1389032980 seamark:type=harbour "Waddenhaven" (position of the area's outer ring, rounded to 4 decimals)
+      - name: North Sea off Vlieland
+        lat: 53.55
+        lon: 4.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w04-harlingen
+    title: Harlingen → open sea
+    waypoints:
+      - name: Harlingen
+        lat: 53.1765
+        lon: 5.4122
+        source: OSM node 48114728 amenity=ferry_terminal "Harlingen" (node position, rounded to 4 decimals)
+      - name: North Sea off Vlieland
+        lat: 53.55
+        lon: 4.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w05-vlieland
+    title: Vlieland → open sea
+    waypoints:
+      - name: Vlieland
+        lat: 53.2962
+        lon: 5.0751
+        source: OSM way 270678722 amenity=ferry_terminal "Veerbootterminal Rederij Doeksen" (position of the area's outer ring, rounded to 4 decimals)
+      - name: North Sea off Vlieland
+        lat: 53.55
+        lon: 4.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w06-terschelling-west
+    title: Terschelling West → open sea
+    waypoints:
+      - name: Terschelling West
+        lat: 53.3567
+        lon: 5.2169
+        source: OSM node 1288092741 amenity=ferry_terminal "Terschelling Veerboot" (node position, rounded to 4 decimals)
+      - name: North Sea off Vlieland
+        lat: 53.55
+        lon: 4.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w07-holwerd
+    title: Holwerd → open sea
+    waypoints:
+      - name: Holwerd
+        lat: 53.3953
+        lon: 5.8791
+        source: OSM node 48463107 amenity=ferry_terminal "Holwert, Veerdam" (node position, rounded to 4 decimals)
+      - name: North Sea off Vlieland
+        lat: 53.55
+        lon: 4.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w08-ameland
+    title: Ameland (Nes) → open sea
+    waypoints:
+      - name: Ameland (Nes)
+        lat: 53.4334
+        lon: 5.7746
+        source: OSM node 1784696793 amenity=ferry_terminal "Nes, Veerweg" (node position, rounded to 4 decimals)
+      - name: North Sea off Vlieland
+        lat: 53.55
+        lon: 4.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w09-lauwersoog
+    title: Lauwersoog → open sea
+    waypoints:
+      - name: Lauwersoog
+        lat: 53.4106
+        lon: 6.1976
+        source: OSM node 48475993 amenity=ferry_terminal "Lauwersoog, Veer" (node position, rounded to 4 decimals)
+      - name: North Sea off Vlieland
+        lat: 53.55
+        lon: 4.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w10-schiermonnikoog
+    title: Schiermonnikoog → open sea
+    waypoints:
+      - name: Schiermonnikoog
+        lat: 53.4686
+        lon: 6.2032
+        source: OSM node 430638841 amenity=ferry_terminal "Schiermonnikoog, Veerdam" (node position, rounded to 4 decimals)
+      - name: North Sea off Vlieland
+        lat: 53.55
+        lon: 4.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w11-eemshaven
+    title: Eemshaven → open sea
+    waypoints:
+      - name: Eemshaven
+        lat: 53.4560
+        lon: 6.8325
+        source: OSM node 471536224 amenity=ferry_terminal "Eemshaven" (node position, rounded to 4 decimals)
+      - name: North Sea off Borkum
+        lat: 53.75
+        lon: 6.4
+    options:
+      max_snap_distance_m: 500
+
+  - id: w12-borkum
+    title: Borkum → open sea
+    waypoints:
+      - name: Borkum
+        lat: 53.5638
+        lon: 6.7562
+        source: OSM node 4060371938 amenity=ferry_terminal "Borkum" (node position, rounded to 4 decimals)
+      - name: North Sea off Borkum
+        lat: 53.75
+        lon: 6.4
+    options:
+      max_snap_distance_m: 500
+
+  - id: w13-emden
+    title: Emden (Borkumanleger) → open sea
+    waypoints:
+      - name: Emden (Borkumanleger)
+        lat: 53.3433
+        lon: 7.1864
+        source: OSM node 4768690516 amenity=ferry_terminal "Emden - Borkum" (node position, rounded to 4 decimals)
+      - name: North Sea off Borkum
+        lat: 53.75
+        lon: 6.4
+    options:
+      max_snap_distance_m: 500
+
+  - id: w14-juist
+    title: Juist → open sea
+    waypoints:
+      - name: Juist
+        lat: 53.6741
+        lon: 6.9955
+        source: OSM node 501612897 amenity=ferry_terminal "Juist" (node position, rounded to 4 decimals)
+      - name: North Sea off Borkum
+        lat: 53.75
+        lon: 6.4
+    options:
+      max_snap_distance_m: 500
+
+  - id: w15-norddeich
+    title: Norddeich → open sea
+    waypoints:
+      - name: Norddeich
+        lat: 53.6258
+        lon: 7.1591
+        source: OSM node 457089821 amenity=ferry_terminal "Norddeich (Norderney-Terminal)" (node position, rounded to 4 decimals)
+      - name: North Sea off Langeoog
+        lat: 53.9
+        lon: 7.5
+    options:
+      max_snap_distance_m: 500
+
+  - id: w16-norderney
+    title: Norderney → open sea
+    waypoints:
+      - name: Norderney
+        lat: 53.6991
+        lon: 7.1626
+        source: OSM node 1081238717 amenity=ferry_terminal "Norderney" (node position, rounded to 4 decimals)
+      - name: North Sea off Langeoog
+        lat: 53.9
+        lon: 7.5
+    options:
+      max_snap_distance_m: 500
+
+  - id: w17-nessmersiel
+    title: Neßmersiel → open sea
+    waypoints:
+      - name: Neßmersiel
+        lat: 53.6854
+        lon: 7.3604
+        source: OSM node 615425361 amenity=ferry_terminal "Baltrum-Linie" (node position, rounded to 4 decimals)
+      - name: North Sea off Langeoog
+        lat: 53.9
+        lon: 7.5
+    options:
+      max_snap_distance_m: 500
+
+  - id: w18-baltrum
+    title: Baltrum → open sea
+    waypoints:
+      - name: Baltrum
+        lat: 53.7232
+        lon: 7.3647
+        source: OSM node 265716854 amenity=ferry_terminal "Baltrum-Neßmersiel" (node position, rounded to 4 decimals)
+      - name: North Sea off Langeoog
+        lat: 53.9
+        lon: 7.5
+    options:
+      max_snap_distance_m: 500
+
+  - id: w19-bensersiel
+    title: Bensersiel → open sea
+    waypoints:
+      - name: Bensersiel
+        lat: 53.6779
+        lon: 7.5733
+        source: OSM node 12186770550 amenity=ferry_terminal "Fähranleger Langeoog" (node position, rounded to 4 decimals)
+      - name: North Sea off Langeoog
+        lat: 53.9
+        lon: 7.5
+    options:
+      max_snap_distance_m: 500
+
+  - id: w20-langeoog
+    title: Langeoog → open sea
+    waypoints:
+      - name: Langeoog
+        lat: 53.7255
+        lon: 7.4960
+        source: OSM node 12116596445 amenity=ferry_terminal "Langeoog" (node position, rounded to 4 decimals)
+      - name: North Sea off Langeoog
+        lat: 53.9
+        lon: 7.5
+    options:
+      max_snap_distance_m: 500
+
+  - id: w21-neuharlingersiel
+    title: Neuharlingersiel → open sea
+    waypoints:
+      - name: Neuharlingersiel
+        lat: 53.7019
+        lon: 7.7060
+        source: OSM node 10831579140 amenity=ferry_terminal "Spiekeroog I" (node position, rounded to 4 decimals)
+      - name: North Sea off Langeoog
+        lat: 53.9
+        lon: 7.5
+    options:
+      max_snap_distance_m: 500
+
+  - id: w22-spiekeroog
+    title: Spiekeroog → open sea
+    waypoints:
+      - name: Spiekeroog
+        lat: 53.7641
+        lon: 7.6951
+        source: OSM node 10831579145 amenity=ferry_terminal "Spiekeroog IV" (node position, rounded to 4 decimals)
+      - name: North Sea off Langeoog
+        lat: 53.9
+        lon: 7.5
+    options:
+      max_snap_distance_m: 500
+
+  - id: w23-harlesiel
+    title: Harlesiel → open sea
+    waypoints:
+      - name: Harlesiel
+        lat: 53.7081
+        lon: 7.8089
+        source: OSM node 14127976765 amenity=ferry_terminal "Hafen West" (node position, rounded to 4 decimals)
+      - name: North Sea off Langeoog
+        lat: 53.9
+        lon: 7.5
+    options:
+      max_snap_distance_m: 500
+
+  - id: w24-wangerooge
+    title: Wangerooge (Westanleger) → open sea
+    waypoints:
+      - name: Wangerooge (Westanleger)
+        lat: 53.7743
+        lon: 7.8669
+        source: OSM node 1274835526 amenity=ferry_terminal "Westanleger" (node position, rounded to 4 decimals)
+      - name: North Sea off Langeoog
+        lat: 53.9
+        lon: 7.5
+    options:
+      max_snap_distance_m: 500
+
+  - id: w25-cuxhaven
+    title: Cuxhaven (Alte Liebe) → open sea
+    waypoints:
+      - name: Cuxhaven (Alte Liebe)
+        lat: 53.8710
+        lon: 8.7083
+        source: OSM node 3707540898 amenity=ferry_terminal "Cuxhaven" (node position, rounded to 4 decimals)
+      - name: Elbe approach off Scharhörn
+        lat: 54.05
+        lon: 8.1
+    options:
+      max_snap_distance_m: 500
+
+  - id: w26-neuwerk
+    title: Neuwerk → open sea
+    waypoints:
+      - name: Neuwerk
+        lat: 53.9176
+        lon: 8.4864
+        source: OSM node 1838824638 amenity=ferry_terminal "Schiffsanleger Neuwerk" (node position, rounded to 4 decimals)
+      - name: Elbe approach off Scharhörn
+        lat: 54.05
+        lon: 8.1
+    options:
+      max_snap_distance_m: 500
+
+  - id: w27-buesum
+    title: Büsum → open sea
+    waypoints:
+      - name: Büsum
+        lat: 54.1233
+        lon: 8.8639
+        source: OSM way 1516110453 seamark:type=harbour "Büsumer Seglerverein e.V." (position of the area's outer ring, rounded to 4 decimals)
+      - name: North Sea off Eiderstedt
+        lat: 54.45
+        lon: 7.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w28-toenning
+    title: Tönning → open sea
+    waypoints:
+      - name: Tönning
+        lat: 54.3142
+        lon: 8.9485
+        source: OSM node 1417128604 amenity=ferry_terminal "Tönning Hafenanleger" (node position, rounded to 4 decimals)
+      - name: North Sea off Eiderstedt
+        lat: 54.45
+        lon: 7.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w29-husum
+    title: Husum → open sea
+    waypoints:
+      - name: Husum
+        lat: 54.4730
+        lon: 9.0468
+        source: OSM node 285989982 seamark:type=harbour "Husumer Segler-Verein" (node position, rounded to 4 decimals)
+      - name: North Sea off Eiderstedt
+        lat: 54.45
+        lon: 7.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w30-strucklahnungshoern
+    title: Strucklahnungshörn (Nordstrand) → open sea
+    waypoints:
+      - name: Strucklahnungshörn (Nordstrand)
+        lat: 54.4978
+        lon: 8.8070
+        source: OSM node 311120377 amenity=ferry_terminal "Strucklahnungshörn" (node position, rounded to 4 decimals)
+      - name: North Sea off Eiderstedt
+        lat: 54.45
+        lon: 7.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w31-pellworm
+    title: Pellworm → open sea
+    waypoints:
+      - name: Pellworm
+        lat: 54.5011
+        lon: 8.7023
+        source: OSM node 292270444 amenity=ferry_terminal "Pellworm" (node position, rounded to 4 decimals)
+      - name: North Sea off Eiderstedt
+        lat: 54.45
+        lon: 7.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w32-hooge
+    title: Hooge → open sea
+    waypoints:
+      - name: Hooge
+        lat: 54.5788
+        lon: 8.5562
+        source: OSM node 8700592295 amenity=ferry_terminal "Fähranleger Hallig Hooge" (node position, rounded to 4 decimals)
+      - name: North Sea off Eiderstedt
+        lat: 54.45
+        lon: 7.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w33-schluettsiel
+    title: Schlüttsiel → open sea
+    waypoints:
+      - name: Schlüttsiel
+        lat: 54.6816
+        lon: 8.7540
+        source: OSM node 583554535 amenity=ferry_terminal "Schlüttsiel" (node position, rounded to 4 decimals)
+      - name: North Sea off Eiderstedt
+        lat: 54.45
+        lon: 7.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w34-dagebuell
+    title: Dagebüll → open sea
+    waypoints:
+      - name: Dagebüll
+        lat: 54.7312
+        lon: 8.6900
+        source: OSM node 583043174 amenity=ferry_terminal "Fährhafen Dagebüll Anleger 1" (node position, rounded to 4 decimals)
+      - name: North Sea off Eiderstedt
+        lat: 54.45
+        lon: 7.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w35-wyk
+    title: Wyk (Föhr) → open sea
+    waypoints:
+      - name: Wyk (Föhr)
+        lat: 54.6928
+        lon: 8.5758
+        source: OSM node 583221179 amenity=ferry_terminal "Fährhafen Wyk Anleger 2" (node position, rounded to 4 decimals)
+      - name: North Sea off Eiderstedt
+        lat: 54.45
+        lon: 7.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w36-wittduen
+    title: Wittdün (Amrum) → open sea
+    waypoints:
+      - name: Wittdün (Amrum)
+        lat: 54.6291
+        lon: 8.3965
+        source: OSM node 1038398761 amenity=ferry_terminal "Wittdün Fähranleger" (node position, rounded to 4 decimals)
+      - name: North Sea off Eiderstedt
+        lat: 54.45
+        lon: 7.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w37-hoernum
+    title: Hörnum (Sylt) → open sea
+    waypoints:
+      - name: Hörnum (Sylt)
+        lat: 54.7574
+        lon: 8.2947
+        source: OSM node 43552409 amenity=ferry_terminal "MS Adler Express" (node position, rounded to 4 decimals)
+      - name: North Sea off Eiderstedt
+        lat: 54.45
+        lon: 7.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w38-list
+    title: List (Sylt) → open sea
+    waypoints:
+      - name: List (Sylt)
+        lat: 55.0155
+        lon: 8.4398
+        source: OSM node 391498589 amenity=ferry_terminal "Syltfähre" (node position, rounded to 4 decimals)
+      - name: North Sea off Rømø
+        lat: 55.3
+        lon: 7.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w39-havneby
+    title: Havneby (Rømø) → open sea
+    waypoints:
+      - name: Havneby (Rømø)
+        lat: 55.0862
+        lon: 8.5703
+        source: OSM node 1435304548 amenity=ferry_terminal "Sildfærgen" (node position, rounded to 4 decimals)
+      - name: North Sea off Rømø
+        lat: 55.3
+        lon: 7.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w40-esbjerg
+    title: Esbjerg → open sea
+    waypoints:
+      - name: Esbjerg
+        lat: 55.4609
+        lon: 8.4401
+        source: OSM node 5640562879 amenity=ferry_terminal "Esbjerg" (node position, rounded to 4 decimals)
+      - name: North Sea off Rømø
+        lat: 55.3
+        lon: 7.9
+    options:
+      max_snap_distance_m: 500
+
+  - id: w41-nordby
+    title: Nordby (Fanø) → open sea
+    waypoints:
+      - name: Nordby (Fanø)
+        lat: 55.4502
+        lon: 8.4084
+        source: OSM node 4937593828 amenity=ferry_terminal "Nordby" (node position, rounded to 4 decimals)
+      - name: North Sea off Rømø
+        lat: 55.3
+        lon: 7.9
+    options:
+      max_snap_distance_m: 500
+

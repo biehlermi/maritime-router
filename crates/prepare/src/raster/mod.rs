@@ -25,6 +25,25 @@
 //!    regions (harbour areas, buffered harbour points and ferry terminals),
 //!    else [`PixelClass::Sea`] or [`PixelClass::Inland`] by the source
 //!    polygon their centre lies in.
+//!
+//!    **Tidal flats** come first: the coastline is at mean high water, so
+//!    flats that fall dry at low tide (the Wadden Sea; OSM
+//!    `wetland=tidalflat`, drying shoals) lie inside the water union. With
+//!    `water.exclude_tidal_flats` (the default), every water pixel a flat
+//!    touches is [`PixelClass::TidalFlat`], conservative like a shore, and
+//!    counts as non-navigable for shore distances and widths like land.
+//!    The channels between flats (the Elbe fairway, the tidal channels to
+//!    Wadden harbours) stay sea. Because this comes before the width rules,
+//!    inland and harbour channels between flats must meet the minimum
+//!    widths; sea channels are never removed. Many harbours are reached
+//!    through buoyed tidal channels that the flat polygons cover, so OSM
+//!    fairway lines (`waterway=fairway`) keep a corridor of
+//!    `water.tidal_fairway_width_m` open: flat pixels lying entirely inside
+//!    it, and those its centre line touches (for connectivity, as for
+//!    passages), keep their water class. A fairway never makes land
+//!    navigable, and fairway pixels keep their detail in step 6. Passage
+//!    corridors and `force_navigable` overrides (step 5) also win over
+//!    flats.
 //! 4. **Width rules.** A morphological opening (erosion, then dilation, on
 //!    all water) removes inland water narrower than `inland_min_width_m`
 //!    and harbour water narrower than `harbour_min_width_m`
@@ -101,26 +120,29 @@ pub enum PixelClass {
     Lake = 3,
     /// Inside a `force_blocked` override.
     Blocked = 4,
+    /// Water touched by a tidal flat (`water.exclude_tidal_flats`).
+    TidalFlat = 5,
     /// Sea water.
-    Sea = 5,
+    Sea = 6,
     /// Inland water (rivers, canals, lagoons, basins; lakes if included).
-    Inland = 6,
+    Inland = 7,
     /// Water inside a harbour region.
-    Harbour = 7,
+    Harbour = 8,
     /// Inside a `force_navigable` override.
-    Override = 8,
+    Override = 9,
     /// Inside a passage corridor; [`Pixel::passage`] gives the passage.
-    Passage = 9,
+    Passage = 10,
 }
 
 impl PixelClass {
     /// All classes in declaration order.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Land,
         Self::Shore,
         Self::Narrow,
         Self::Lake,
         Self::Blocked,
+        Self::TidalFlat,
         Self::Sea,
         Self::Inland,
         Self::Harbour,
@@ -142,6 +164,7 @@ impl PixelClass {
             Self::Narrow => "narrow",
             Self::Lake => "lake",
             Self::Blocked => "blocked",
+            Self::TidalFlat => "tidal_flat",
             Self::Sea => "sea",
             Self::Inland => "inland",
             Self::Harbour => "harbour",
@@ -154,7 +177,7 @@ impl PixelClass {
 /// One pixel: a class, the passage index for passage pixels, and whether
 /// the pixel lies in a harbour region (where the finest cells are built,
 /// whatever the class). Packed into one byte: bits 0–4 hold the class code
-/// (classes 0–8 as is, passages as 16 + index), bit 7 the harbour flag.
+/// (classes 0–9 as is, passages as 16 + index), bit 7 the harbour flag.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(transparent)]
 pub struct Pixel(u8);
@@ -189,7 +212,7 @@ impl Pixel {
         if code >= PASSAGE_BASE {
             PixelClass::Passage
         } else {
-            PixelClass::ALL[usize::from(code).min(8)]
+            PixelClass::ALL[usize::from(code).min(9)]
         }
     }
 
@@ -289,8 +312,8 @@ impl TileRaster {
     }
 
     /// Number of pixels of each class, indexed by `PixelClass as usize`.
-    pub fn class_counts(&self) -> [u64; 10] {
-        let mut counts = [0; 10];
+    pub fn class_counts(&self) -> [u64; PixelClass::ALL.len()] {
+        let mut counts = [0; PixelClass::ALL.len()];
         for p in &self.pixels {
             counts[p.class() as usize] += 1;
         }
@@ -341,6 +364,8 @@ pub struct RasterParams {
     pub harbour_min_width_m: f64,
     /// Whether lakes count as inland water.
     pub include_lakes: bool,
+    /// Whether tidal flats are blocked.
+    pub exclude_tidal_flats: bool,
 }
 
 impl RasterParams {
@@ -365,6 +390,7 @@ impl RasterParams {
             inland_min_width_m: config.water.inland_min_width_m,
             harbour_min_width_m: config.water.harbour_min_width_m,
             include_lakes: config.water.include_lakes,
+            exclude_tidal_flats: config.water.exclude_tidal_flats,
         }
     }
 }
@@ -394,6 +420,7 @@ mod tests {
             assert!(p.is_navigable());
         }
         assert!(!Pixel::new(PixelClass::Shore).is_navigable());
+        assert!(!Pixel::new(PixelClass::TidalFlat).is_navigable());
         assert_eq!(
             format!("{:?}", Pixel::passage_pixel(2).with_harbour_region(true)),
             "passage#2+harbour"

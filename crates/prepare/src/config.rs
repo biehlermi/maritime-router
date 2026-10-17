@@ -81,6 +81,13 @@ pub struct WaterConfig {
     pub inland_min_width_m: f64,
     pub harbour_min_width_m: f64,
     pub include_lakes: bool,
+    /// Whether tidal flats (OSM `wetland=tidalflat`, drying shoals) are
+    /// blocked. The coastline is at mean high water, so without this they
+    /// are sea; see `config/prepare.toml`.
+    pub exclude_tidal_flats: bool,
+    /// Width in metres of the corridor along OSM fairways (`waterway=fairway`)
+    /// that stays open through tidal flats; 0 turns it off.
+    pub tidal_fairway_width_m: f64,
     /// Sea components (connected water with a sea cell, all passages
     /// allowed) smaller than this many km² are dropped like ponds. They
     /// are fragments the conservative raster cut off from the sea; see
@@ -94,6 +101,8 @@ impl Default for WaterConfig {
             inland_min_width_m: 150.0,
             harbour_min_width_m: 30.0,
             include_lakes: false,
+            exclude_tidal_flats: true,
+            tidal_fairway_width_m: 100.0,
             min_sea_component_km2: 0.1,
         }
     }
@@ -238,6 +247,12 @@ impl Config {
                 "water.min_sea_component_km2 must be a non-negative number, got {min_comp}"
             ));
         }
+        let fairway = self.water.tidal_fairway_width_m;
+        if !(fairway.is_finite() && fairway >= 0.0) {
+            problems.push(format!(
+                "water.tidal_fairway_width_m must be a non-negative number, got {fairway}"
+            ));
+        }
         if g.harbour_min_cell_m > g.coastal_min_cell_m {
             problems.push("grid.harbour_min_cell_m must not exceed grid.coastal_min_cell_m".into());
         }
@@ -259,6 +274,7 @@ impl Config {
             ("harbour.ferry_terminal_buffer_m", h.ferry_terminal_buffer_m),
             ("harbour.harbour_point_buffer_m", h.harbour_point_buffer_m),
             ("water.inland_min_width_m", self.water.inland_min_width_m),
+            ("water.tidal_fairway_width_m", fairway),
         ] {
             if v > g.tile_halo_m {
                 problems.push(format!(
@@ -311,6 +327,11 @@ mod tests {
         assert_eq!(config.water.inland_min_width_m, 150.0);
         assert_eq!(config.region.bbox, None);
         assert_eq!(config.water.min_sea_component_km2, 0.1);
+        assert!(config.water.exclude_tidal_flats);
+        assert_eq!(config.water.tidal_fairway_width_m, 100.0);
+        assert!(Config::parse("[water]\ntidal_fairway_width_m = -1\n", "t").is_err());
+        let off = Config::parse("[water]\nexclude_tidal_flats = false\n", "t").unwrap();
+        assert!(!off.water.exclude_tidal_flats);
     }
 
     #[test]
