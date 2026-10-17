@@ -9,8 +9,8 @@
 //! | `passage` | `LineString` | `leg`, `passage`: the parts of the route in a passage |
 //! | `waypoint` | `Point` | `index`, `name` |
 //! | `snap` | `Point` | `index`, `distance_m` |
-//! | `near` | `Point` | `name`, `radius_m`, `passed`: a `passes_near` expectation |
-//! | `avoid` | `Point` or `Polygon` | `name`, `radius_m` (circles), `passed` |
+//! | `near` | `Point` | `name`, `radius_m`, `passed`: a `passes_near` expectation; `alternative` for one of an `any_of` |
+//! | `avoid` | `Point` or `Polygon` | `name`, `radius_m` (circles), `passed`; `alternative` for one of an `any_of` |
 //! | `land` | `Point` | `check` (`model`/`vector`): a position found on land |
 
 use std::fmt::Write as _;
@@ -22,7 +22,8 @@ use maritime_router_core::route::Route;
 use serde_json::{Value, json};
 
 use crate::cases::Case;
-use crate::checks::water_part;
+use crate::cases::{Area, Near};
+use crate::checks::{alternative_checks, water_part};
 use crate::run::CaseResult;
 
 fn coords(points: &[LatLon]) -> Value {
@@ -137,6 +138,55 @@ pub fn route_features(
     out
 }
 
+/// The `near` and `avoid` features of expectation points and areas;
+/// `passed` gives the result of the check of that name.
+fn place_features(
+    features: &mut Vec<Value>,
+    near: &[Near],
+    avoids: &[Area],
+    alternative: Option<&str>,
+    passed: impl Fn(&str) -> bool,
+) {
+    let props = |mut v: Value| {
+        if let (Some(alt), Some(map)) = (alternative, v.as_object_mut()) {
+            map.insert("alternative".into(), alt.into());
+        }
+        v
+    };
+    for n in near {
+        features.push(feature(
+            point(LatLon::new(n.lat, n.lon)),
+            props(
+                json!({ "kind": "near", "name": n.name, "radius_m": n.radius_m,
+                          "passed": passed(&format!("passes_near {}", n.name)) }),
+            ),
+        ));
+    }
+    for a in avoids {
+        let ok = passed(&format!("avoids {}", a.name));
+        if let Some(c) = &a.circle {
+            features.push(feature(
+                point(LatLon::new(c.lat, c.lon)),
+                props(
+                    json!({ "kind": "avoid", "name": a.name, "radius_m": c.radius_m, "passed": ok }),
+                ),
+            ));
+        }
+        if let Some(ring) = &a.polygon {
+            let mut ring: Vec<[f64; 2]> = ring.clone();
+            if ring.first() != ring.last()
+                && let Some(&first) = ring.first()
+            {
+                ring.push(first);
+            }
+            features.push(feature(
+                json!({ "type": "Polygon", "coordinates": [ring] }),
+                props(json!({ "kind": "avoid", "name": a.name, "passed": ok })),
+            ));
+        }
+    }
+}
+
 /// A `FeatureCollection` of `features`.
 pub fn collection(features: Vec<Value>) -> Value {
     let mut map = serde_json::Map::new();
@@ -178,33 +228,25 @@ pub fn case_geojson(
             .find(|c| c.name == name)
             .is_none_or(|c| c.passed)
     };
-    for n in &case.expect.passes_near {
-        features.push(feature(
-            point(LatLon::new(n.lat, n.lon)),
-            json!({ "kind": "near", "name": n.name, "radius_m": n.radius_m,
-                    "passed": passed(&format!("passes_near {}", n.name)) }),
-        ));
-    }
-    for a in &case.expect.avoids {
-        let ok = passed(&format!("avoids {}", a.name));
-        if let Some(c) = &a.circle {
-            features.push(feature(
-                point(LatLon::new(c.lat, c.lon)),
-                json!({ "kind": "avoid", "name": a.name, "radius_m": c.radius_m, "passed": ok }),
-            ));
-        }
-        if let Some(ring) = &a.polygon {
-            let mut ring: Vec<[f64; 2]> = ring.clone();
-            if ring.first() != ring.last()
-                && let Some(&first) = ring.first()
-            {
-                ring.push(first);
-            }
-            features.push(feature(
-                json!({ "type": "Polygon", "coordinates": [ring] }),
-                json!({ "kind": "avoid", "name": a.name, "passed": ok }),
-            ));
-        }
+    let e = &case.expect;
+    place_features(&mut features, &e.passes_near, &e.avoids, None, |name| {
+        passed(name)
+    });
+    // Alternatives: each point or area shows its own result.
+    let full: Vec<Vec<LatLon>> = route.map_or_else(Vec::new, |r| {
+        r.legs.iter().map(|l| l.geometry.points()).collect()
+    });
+    let water: Vec<Vec<LatLon>> =
+        route.map_or_else(Vec::new, |r| r.legs.iter().map(water_part).collect());
+    for alt in &e.any_of {
+        let checks = alternative_checks(alt, &full, &water);
+        place_features(
+            &mut features,
+            &alt.passes_near,
+            &alt.avoids,
+            Some(&alt.name),
+            |name| route.is_some() && checks.iter().any(|c| c.name == name && c.passed),
+        );
     }
     for (check, land) in [
         ("model", &result.land_model),

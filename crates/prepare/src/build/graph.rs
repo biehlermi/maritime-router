@@ -17,8 +17,8 @@
 //!    The rest becomes land: ponds, lakes, rivers cut off by the width
 //!    rules, and small sea fragments the conservative raster cut off from
 //!    the sea (a terminal could otherwise snap into one and find no route).
-//! 4. **Weights.** `edge_weight_dm` of the centres with the mean shore
-//!    penalty of both ends.
+//! 4. **Weights.** `edge_weight_dm` of the centres with the mean penalty
+//!    of both ends ([`super::Penalty`]).
 //! 5. **Land.** Land leaves and dropped water, with each complete set of
 //!    four siblings merged into their parent, repeatedly.
 //!
@@ -28,12 +28,12 @@
 use maritime_router_core::geo::LatLon;
 use maritime_router_core::grid::{CellId, Point3};
 use maritime_router_core::model::{
-    GraphMeta, GraphSections, ModelError, PassageInfo, WaterClass, edge_weight_dm, node_penalty,
-    walk_arc,
+    GraphMeta, GraphSections, ModelError, PassageInfo, WaterClass, edge_weight_dm, walk_arc,
 };
 use rayon::prelude::*;
 
 use super::leaves::{TileLeaves, WaterLeaf};
+use super::{GraphParams, Penalty};
 
 /// Counts from the global steps.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -62,6 +62,9 @@ pub struct GraphStats {
     pub edges: u64,
     /// Final land cells after merging.
     pub land_cells: u64,
+    /// Final nodes on a ship route.
+    #[serde(default)]
+    pub ship_route_nodes: u64,
 }
 
 /// The leaf-ID range `[min, max]` of a raw cell ID (as `CellId::range_min`
@@ -151,12 +154,12 @@ pub fn merge_siblings(cells: &[CellId]) -> Vec<CellId> {
 }
 
 /// Builds the graph sections from the leaves of all tiles (in any order),
-/// dropping sea components smaller than `min_sea_component_m2`.
+/// dropping sea components smaller than `params.min_sea_component_m2`.
 pub fn assemble(
     mut tiles: Vec<(CellId, TileLeaves)>,
     meta: GraphMeta,
     passages: Vec<PassageInfo>,
-    min_sea_component_m2: f64,
+    params: &GraphParams,
 ) -> Result<(GraphSections, GraphStats), ModelError> {
     let mut stats = GraphStats::default();
 
@@ -177,14 +180,14 @@ pub fn assemble(
     }
 
     // 2. Adjacency with weights.
-    let edges = adjacency(&leaves, &meta, &mut stats);
+    let edges = adjacency(&leaves, &params.penalty, &mut stats);
 
     // 3. Connectivity; dropped water becomes land.
     let Kept {
         new_id,
         comp,
         nodes,
-    } = connectivity(&leaves, &edges, min_sea_component_m2, &mut stats);
+    } = connectivity(&leaves, &edges, params.min_sea_component_m2, &mut stats);
     land.extend(
         leaves
             .iter()
@@ -208,6 +211,7 @@ pub fn assemble(
         .zip(&new_id)
         .filter(|&(_, &id)| id != u32::MAX)
         .map(|(l, _)| l);
+    stats.ship_route_nodes = kept.clone().filter(|l| l.ship_route).count() as u64;
     let sections = GraphSections {
         meta: Some(meta),
         passages,
@@ -229,7 +233,7 @@ pub fn assemble(
 /// navigable leaves.
 fn adjacency(
     leaves: &[WaterLeaf],
-    meta: &GraphMeta,
+    penalty: &Penalty,
     stats: &mut GraphStats,
 ) -> Vec<(u32, u32, u32)> {
     let cells: Vec<u64> = leaves.iter().map(|l| l.cell.raw()).collect();
@@ -257,7 +261,7 @@ fn adjacency(
         .collect();
     let penalties: Vec<f64> = leaves
         .par_iter()
-        .map(|l| node_penalty(meta, f64::from(l.shore_m)))
+        .map(|l| penalty.of(f64::from(l.shore_m), f64::from(l.width_m), l.ship_route))
         .collect();
     let edges: Vec<(u32, u32, u32)> = pairs
         .par_iter()

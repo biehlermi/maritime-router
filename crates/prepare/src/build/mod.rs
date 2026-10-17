@@ -17,6 +17,7 @@
 
 pub mod graph;
 pub mod leaves;
+mod penalty;
 pub mod stats;
 
 use std::path::{Path, PathBuf};
@@ -34,6 +35,7 @@ use serde::{Deserialize, Serialize};
 
 use self::graph::GraphStats;
 use self::leaves::{LeafParams, TileLeaves};
+pub use self::penalty::Penalty;
 use crate::config::Config;
 use crate::curated::{self, Passage, PassageDefault};
 use crate::download::Manifest;
@@ -100,13 +102,16 @@ pub struct BuildReport {
 pub struct GraphParams {
     /// Sea components below this area (m²) are dropped.
     pub min_sea_component_m2: f64,
+    /// The cost multiplier of the edge weights.
+    pub penalty: Penalty,
 }
 
 impl GraphParams {
-    /// The parameters from `[water]`.
+    /// The parameters from `[water]` and `[routing]`.
     pub fn from_config(config: &Config) -> Self {
         Self {
             min_sea_component_m2: config.water.min_sea_component_km2 * 1e6,
+            penalty: Penalty::from_config(&config.routing),
         }
     }
 }
@@ -165,8 +170,7 @@ pub fn build_graph(
     let tiles_s = start.elapsed().as_secs_f64();
 
     let start = Instant::now();
-    let (sections, graph_stats) =
-        graph::assemble(leaves, meta, passages, graph_params.min_sea_component_m2)?;
+    let (sections, graph_stats) = graph::assemble(leaves, meta, passages, &graph_params)?;
     Ok((
         sections,
         tile_stats,

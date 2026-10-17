@@ -59,8 +59,38 @@ harbour_point_buffer_m = 500   # buffer around harbour points (harbour=yes nodes
 # extra_points = [[lon, lat], ...]  # additional points that get harbour detail
 
 [routing]
-shore_preferred_distance_m = 3704  # ~2 nm; closer cells get a cost multiplier
-shore_penalty_max = 3.0            # multiplier at the shore
+# Cost multipliers baked into the edge weights. Each is at least 1, so the
+# geodesic distance stays an admissible A* heuristic; reported distances are
+# always measured on the final geometry. A leaf's multiplier is
+#   shore term  1 + (shore_penalty_max - 1) * (1 - shore / reach), reach = min(P, width / 2)
+#   x narrow-water term  1 + (narrow_penalty_max - 1) * (1 - width / narrow_width_m)
+# and on a ship route only ship_route_penalty_share of the excess over 1 is
+# kept (crates/prepare/src/build/penalty.rs).
+shore_preferred_distance_m = 3704  # P, ~2 nm: open water closer to land gets the shore term
+shore_penalty_max = 3.0            # shore term at the shore
+# In channels narrower than 2P the shore distance is measured against the local
+# half-width, so the middle of a river, canal or fjord is cheapest and routes
+# stay centred instead of cutting along the inside of every bend. With the
+# absolute distance the middle of a 200 m canal was only 2 % cheaper than its
+# bank, and fjords 2 km wide cost 2.4x even in the middle, which pushed routes
+# out of the inner leads (Bergen).
+centre_channels = true
+# Narrow water costs extra even in the middle, so routes don't squeeze through
+# every gap between skerries that saves a little distance: 1.6x at 200 m,
+# 1.2x at 400 m, nothing from 500 m.
+narrow_width_m = 500
+narrow_penalty_max = 2.0
+# Ship routes: OSM fairways for ships (waterway=fairway that are not canoe or
+# kayak routes, small inland waterways of CEMT class 0-III or stated to be
+# shallower than 5 m), recommended tracks (seamark:type=recommended_track, same
+# depth rule) and traffic separation lanes (seamark:type=separation_lane). Water
+# in a corridor this wide along them keeps only ship_route_penalty_share of its
+# multiplier above 1, so routes follow buoyed channels (the Elbe past Cuxhaven,
+# the Ambrose Channel) where they are mapped. Not on tidal flats that a tidal
+# fairway corridor keeps open. 0 turns a kind off.
+ship_fairway_width_m = 300         # about a main fairway's width (Elbe ~400 m, Ambrose ~600 m)
+separation_lane_width_m = 1000     # TSS lanes are 1-3 nm wide; the line is the lane's centre
+ship_route_penalty_share = 0.2
 
 [sources]
 water_polygons = "sources/water-polygons-split-4326"

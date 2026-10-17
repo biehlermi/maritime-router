@@ -198,9 +198,13 @@ fn classifies_tidal_flats() {
         flat
     );
     assert_eq!(classes(r#"{"natural":"mud","wetland":"tidalflat"}"#), flat);
+    // A tidal fairway is also a ship route by its tags; the raster leaves
+    // its stretches across flats without the reduced penalty.
     assert_eq!(
         classes(r#"{"waterway":"fairway","name":"Otzumer Balje"}"#),
-        ClassSet::only(SourceClass::Fairway)
+        [SourceClass::Fairway, SourceClass::ShipFairway]
+            .into_iter()
+            .collect()
     );
     // Drying banks.
     assert_eq!(classes(r#"{"natural":"shoal","tidal":"yes"}"#), flat);
@@ -223,6 +227,58 @@ fn classifies_tidal_flats() {
 }
 
 #[test]
+fn classifies_ship_routes() {
+    let classes = |json: &str| {
+        let tags: serde_json::Map<String, serde_json::Value> = serde_json::from_str(json).unwrap();
+        classify_tags(&tags)
+    };
+    let ship = |json: &str| classes(json).contains(SourceClass::ShipFairway);
+    // Ship fairways as tagged in the Phase-1 sources.
+    assert!(ship(
+        r#"{"waterway":"fairway","name":"Elbe","ship":"yes","CEMT":"Va"}"#
+    ));
+    assert!(ship(
+        r#"{"waterway":"fairway","name":"Ambrose Channel","ship":"yes","canoe":"discouraged","depth":"53 ft"}"#
+    ));
+    assert!(ship(
+        r#"{"waterway":"fairway","boat":"yes","source":"extrapolation"}"#
+    ));
+    assert!(ship(r#"{"waterway":"fairway","CEMT":"VIb"}"#));
+    assert!(ship(
+        r#"{"seamark:type":"recommended_track","seamark:recommended_track:minimum_depth":"11"}"#
+    ));
+    assert!(ship(r#"{"seamark:type":"recommended_track"}"#));
+    // Canoe routes, small inland waterways, shallow channels, closed ones.
+    for json in [
+        r#"{"waterway":"fairway","canoe":"yes","rapids":"no"}"#,
+        r#"{"waterway":"fairway","sea_kayak":"designated","route":"canoe"}"#,
+        r#"{"waterway":"fairway","CEMT":"II"}"#,
+        r#"{"waterway":"fairway","CEMT":"0"}"#,
+        r#"{"waterway":"fairway","depth":"2.4"}"#,
+        r#"{"waterway":"fairway","depth":"12 ft"}"#,
+        r#"{"waterway":"fairway","ship":"no"}"#,
+        r#"{"waterway":"fairway","access":"no"}"#,
+        r#"{"seamark:type":"recommended_track","seamark:recommended_track:minimum_depth":"2,4"}"#,
+    ] {
+        assert!(!ship(json), "{json}");
+    }
+    // ship=yes wins over a canoe tag; fairways stay tidal corridors either way.
+    assert!(ship(r#"{"waterway":"fairway","canoe":"yes","ship":"yes"}"#));
+    assert!(classes(r#"{"waterway":"fairway","canoe":"yes"}"#).contains(SourceClass::Fairway));
+    // Traffic separation lanes, also when tagged as fairways.
+    assert_eq!(
+        classes(r#"{"seamark:type":"separation_lane"}"#),
+        ClassSet::only(SourceClass::SeparationLane)
+    );
+    assert!(
+        classes(r#"{"seamark:type":"separation_lane","waterway":"fairway"}"#)
+            .contains(SourceClass::SeparationLane)
+    );
+    // Separation zones are not routes.
+    assert!(classes(r#"{"seamark:type":"separation_zone"}"#).is_empty());
+}
+
+#[test]
 fn tidal_flats_are_areas_and_fairways_lines() {
     let input = concat!(
         r#"{"type":"Feature","id":"a8","geometry":{"type":"Polygon","coordinates":[[[8.4,53.9],[8.5,53.9],[8.5,54.0],[8.4,53.9]]]},"properties":{"natural":"wetland","wetland":"tidalflat"}}"#,
@@ -242,7 +298,7 @@ fn tidal_flats_are_areas_and_fairways_lines() {
         classes(&features),
         vec![
             ("w4", vec![SourceClass::TidalFlat]),
-            ("w10", vec![SourceClass::Fairway]),
+            ("w10", vec![SourceClass::Fairway, SourceClass::ShipFairway]),
         ]
     );
     assert_eq!(reader.stats().unsupported_geometry, 3);

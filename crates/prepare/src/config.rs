@@ -130,12 +130,34 @@ impl Default for HarbourConfig {
     }
 }
 
-/// `[routing]`.
+/// `[routing]`: the cost multipliers baked into the edge weights (see
+/// [`crate::build::Penalty`]). Every multiplier is at least 1, so the A*
+/// heuristic stays admissible.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RoutingConfig {
+    /// Open water closer to land than this gets the shore penalty.
     pub shore_preferred_distance_m: f64,
+    /// Shore penalty at the shore (≥ 1).
     pub shore_penalty_max: f64,
+    /// In channels narrower than twice `shore_preferred_distance_m`, the
+    /// shore penalty is measured against the local half-width, so the middle
+    /// of a river, canal or fjord is cheapest. Off: the absolute distance
+    /// everywhere (the Phase-1 rule before PR 9).
+    pub centre_channels: bool,
+    /// Water narrower than this gets an extra multiplier that rises towards
+    /// `narrow_penalty_max` as the channel gets narrower; 0 turns it off.
+    pub narrow_width_m: f64,
+    /// Narrow-water multiplier for a channel of zero width (≥ 1).
+    pub narrow_penalty_max: f64,
+    /// Width of the corridor along ship fairways and recommended tracks
+    /// whose water gets the reduced penalty; 0 turns it off.
+    pub ship_fairway_width_m: f64,
+    /// Width of the corridor along traffic separation lanes; 0 turns it off.
+    pub separation_lane_width_m: f64,
+    /// Share of the penalty above 1 that water on a ship route keeps, in
+    /// [0, 1]: 0 makes it cost the plain distance, 1 ignores ship routes.
+    pub ship_route_penalty_share: f64,
 }
 
 impl Default for RoutingConfig {
@@ -143,6 +165,12 @@ impl Default for RoutingConfig {
         Self {
             shore_preferred_distance_m: 3704.0,
             shore_penalty_max: 3.0,
+            centre_channels: true,
+            narrow_width_m: 500.0,
+            narrow_penalty_max: 2.0,
+            ship_fairway_width_m: 300.0,
+            separation_lane_width_m: 1000.0,
+            ship_route_penalty_share: 0.2,
         }
     }
 }
@@ -269,12 +297,16 @@ impl Config {
                 g.tile_halo_m, self.routing.shore_preferred_distance_m
             ));
         }
+        self.check_routing(&mut problems);
+        let r = &self.routing;
         let h = &self.harbour;
         for (name, v) in [
             ("harbour.ferry_terminal_buffer_m", h.ferry_terminal_buffer_m),
             ("harbour.harbour_point_buffer_m", h.harbour_point_buffer_m),
             ("water.inland_min_width_m", self.water.inland_min_width_m),
             ("water.tidal_fairway_width_m", fairway),
+            ("routing.ship_fairway_width_m", r.ship_fairway_width_m),
+            ("routing.separation_lane_width_m", r.separation_lane_width_m),
         ] {
             if v > g.tile_halo_m {
                 problems.push(format!(
@@ -292,6 +324,16 @@ impl Config {
                 problems.push(format!("harbour.extra_points: invalid point {p:?}"));
             }
         }
+        self.check_region(&mut problems);
+        if problems.is_empty() {
+            Ok(())
+        } else {
+            Err(ConfigError::Invalid(problems.join("; ")))
+        }
+    }
+
+    /// Region boxes: valid coordinates, min below max.
+    fn check_region(&self, problems: &mut Vec<String>) {
         for [w, s, e, n] in self.region.boxes().unwrap_or_default() {
             let ok = [w, s, e, n].iter().all(|v| v.is_finite())
                 && (-180.0..=180.0).contains(&w)
@@ -307,10 +349,39 @@ impl Config {
                 ));
             }
         }
-        if problems.is_empty() {
-            Ok(())
-        } else {
-            Err(ConfigError::Invalid(problems.join("; ")))
+    }
+
+    /// Value ranges of `[routing]`: every multiplier at least 1 (so the A*
+    /// heuristic stays admissible), widths not negative, the share in
+    /// [0, 1].
+    fn check_routing(&self, problems: &mut Vec<String>) {
+        let r = &self.routing;
+        for (name, v) in [
+            ("routing.shore_penalty_max", r.shore_penalty_max),
+            ("routing.narrow_penalty_max", r.narrow_penalty_max),
+        ] {
+            if !(v.is_finite() && v >= 1.0) {
+                problems.push(format!("{name} must be at least 1, got {v}"));
+            }
+        }
+        for (name, v) in [
+            (
+                "routing.shore_preferred_distance_m",
+                r.shore_preferred_distance_m,
+            ),
+            ("routing.narrow_width_m", r.narrow_width_m),
+            ("routing.ship_fairway_width_m", r.ship_fairway_width_m),
+            ("routing.separation_lane_width_m", r.separation_lane_width_m),
+        ] {
+            if !(v.is_finite() && v >= 0.0) {
+                problems.push(format!("{name} must be a non-negative number, got {v}"));
+            }
+        }
+        if !(0.0..=1.0).contains(&r.ship_route_penalty_share) {
+            problems.push(format!(
+                "routing.ship_route_penalty_share must be in [0, 1], got {}",
+                r.ship_route_penalty_share
+            ));
         }
     }
 }
@@ -343,6 +414,12 @@ mod tests {
         assert_eq!(ok.region.bbox, Some([8.5, 53.4, 10.1, 54.0]));
         assert!(Config::parse("[water]\nmin_sea_component_km2 = -1\n", "t").is_err());
         assert!(Config::parse("[region]\nbboxes = [[1, 2, 3, 4], [5, 6, 4, 7]]\n", "t").is_err());
+        // Multipliers below 1 would make the A* heuristic inadmissible.
+        assert!(Config::parse("[routing]\nshore_penalty_max = 0.9\n", "t").is_err());
+        assert!(Config::parse("[routing]\nnarrow_penalty_max = 0.5\n", "t").is_err());
+        assert!(Config::parse("[routing]\nship_route_penalty_share = 1.5\n", "t").is_err());
+        assert!(Config::parse("[routing]\nship_fairway_width_m = 5000\n", "t").is_err());
+        assert!(Config::parse("[routing]\nnarrow_width_m = -1\n", "t").is_err());
     }
 
     #[test]

@@ -15,6 +15,12 @@
 #   - fairway centre lines (waterway=fairway, exported as lines): a corridor
 #     along them stays open through tidal flats ([water] tidal_fairway_width_m),
 #     so harbours reached through buoyed tidal channels stay reachable.
+#   - ship routes (exported as lines): traffic separation lanes
+#     (seamark:type=separation_lane) and recommended tracks
+#     (seamark:type=recommended_track). With the ship fairways among the
+#     fairway lines they get a reduced shore penalty ([routing] ship_route_*);
+#     the ship, canoe, CEMT, access and depth tags tell ship fairways from
+#     canoe routes and shallow small-craft channels.
 #
 # osmium filters by single tags, so it keeps every area with one of the water=*
 # values (and every tidal=yes area); the exact combinations (natural=water plus
@@ -47,9 +53,10 @@ FILTERS=(
   "a/wetland=tidalflat"
   "a/tidal=yes"
   "w/waterway=fairway"
+  "w/seamark:type=separation_lane,recommended_track"
 )
 # Only these tags are written to the output; the reader needs no others.
-KEEP_TAGS='["natural","water","waterway","landuse","industrial","harbour","seamark:type","amenity","wetland","tidal","name"]'
+KEEP_TAGS='["natural","water","waterway","landuse","industrial","harbour","seamark:type","amenity","wetland","tidal","name","ship","canoe","sea_kayak","access","CEMT","depth","seamark:recommended_track:minimum_depth"]'
 
 usage() {
   sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//' >&2
@@ -127,7 +134,7 @@ cat >"$work/export.json" <<EOF
 {
   "attributes": {"type": false, "id": false, "version": false, "changeset": false,
                  "timestamp": false, "uid": false, "user": false, "way_nodes": false},
-  "linear_tags": ["waterway=fairway"],
+  "linear_tags": ["waterway=fairway", "seamark:type=separation_lane", "seamark:type=recommended_track"],
   "area_tags": true,
   "include_tags": $KEEP_TAGS
 }

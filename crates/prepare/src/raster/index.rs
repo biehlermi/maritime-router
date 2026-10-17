@@ -54,13 +54,35 @@ pub(crate) struct LayerPolygon {
     pub polygon: Polygon<f64>,
 }
 
-/// A passage corridor drawn as a buffered centre line, or (without a
-/// passage) a fairway corridor that keeps tidal flats open.
+/// What a corridor line does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LineKind {
+    /// A passage corridor (forced navigable, tagged with the passage index).
+    Passage(u8),
+    /// A fairway corridor that keeps tidal flats open.
+    TidalFairway,
+    /// A ship fairway, recommended track or traffic separation lane: water
+    /// along it gets the reduced shore penalty.
+    ShipRoute,
+}
+
+/// A corridor along a centre line: a passage, a fairway through tidal flats
+/// or a ship route.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CorridorLine {
-    pub passage: Option<u8>,
+    pub kind: LineKind,
     pub line: LineString<f64>,
     pub width_m: f64,
+}
+
+impl CorridorLine {
+    /// The passage index of a passage corridor.
+    pub(crate) fn passage(&self) -> Option<u8> {
+        match self.kind {
+            LineKind::Passage(p) => Some(p),
+            _ => None,
+        }
+    }
 }
 
 /// A reference from the R-tree into the geometry lists.
@@ -96,6 +118,8 @@ pub struct SourceIndexBuilder {
     harbour_point_buffer_m: f64,
     ferry_buffer_m: f64,
     fairway_width_m: f64,
+    ship_fairway_width_m: f64,
+    separation_lane_width_m: f64,
 }
 
 /// Degrees of latitude per metre.
@@ -135,7 +159,19 @@ impl SourceIndexBuilder {
             harbour_point_buffer_m,
             ferry_buffer_m,
             fairway_width_m: crate::config::WaterConfig::default().tidal_fairway_width_m,
+            ship_fairway_width_m: 0.0,
+            separation_lane_width_m: 0.0,
         }
+    }
+
+    /// Sets the corridor widths along ship fairways and recommended tracks
+    /// and along traffic separation lanes (`routing.ship_fairway_width_m`,
+    /// `routing.separation_lane_width_m`; 0 ignores them, the default).
+    #[must_use]
+    pub fn with_ship_routes(mut self, fairway_width_m: f64, lane_width_m: f64) -> Self {
+        self.ship_fairway_width_m = fairway_width_m;
+        self.separation_lane_width_m = lane_width_m;
+        self
     }
 
     /// Sets the width of the corridor kept open through tidal flats along
@@ -146,8 +182,8 @@ impl SourceIndexBuilder {
         self
     }
 
-    fn push_fairway(&mut self, geometry: &Geometry<f64>) {
-        if self.fairway_width_m <= 0.0 {
+    fn push_lines(&mut self, kind: LineKind, width_m: f64, geometry: &Geometry<f64>) {
+        if width_m <= 0.0 {
             return;
         }
         let lines: Vec<&LineString<f64>> = match geometry {
@@ -158,9 +194,9 @@ impl SourceIndexBuilder {
         for line in lines {
             if line.0.len() >= 2 {
                 self.lines.push(CorridorLine {
-                    passage: None,
+                    kind,
                     line: line.clone(),
-                    width_m: self.fairway_width_m,
+                    width_m,
                 });
             }
         }
@@ -205,7 +241,15 @@ impl SourceIndexBuilder {
                 SourceClass::InlandWater => self.push_polygons(Layer::Inland, 0, g),
                 SourceClass::Lake => self.push_polygons(Layer::Lake, 0, g),
                 SourceClass::TidalFlat => self.push_polygons(Layer::TidalFlat, 0, g),
-                SourceClass::Fairway => self.push_fairway(g),
+                SourceClass::Fairway => {
+                    self.push_lines(LineKind::TidalFairway, self.fairway_width_m, g);
+                }
+                SourceClass::ShipFairway => {
+                    self.push_lines(LineKind::ShipRoute, self.ship_fairway_width_m, g);
+                }
+                SourceClass::SeparationLane => {
+                    self.push_lines(LineKind::ShipRoute, self.separation_lane_width_m, g);
+                }
                 SourceClass::Harbour if is_area => self.push_polygons(Layer::HarbourArea, 0, g),
                 SourceClass::Harbour => self.push_points(g, self.harbour_point_buffer_m),
                 SourceClass::FerryTerminal if is_area => {
@@ -238,7 +282,7 @@ impl SourceIndexBuilder {
                     Corridor::Line { line, width_m } => {
                         for ls in &line.0 {
                             self.lines.push(CorridorLine {
-                                passage: Some(index),
+                                kind: LineKind::Passage(index),
                                 line: ls.clone(),
                                 width_m: *width_m,
                             });
@@ -315,7 +359,8 @@ impl SourceIndex {
     /// Reads every source named in `config`: the water polygons, the
     /// filtered OSM file, the passages and the overrides. With region boxes,
     /// features are read if they overlap a box grown by `margin_m`. Tidal
-    /// flats and fairways are only read with `water.exclude_tidal_flats`.
+    /// flats and their fairway corridors are only read with
+    /// `water.exclude_tidal_flats`.
     pub fn load(config: &Config, margin_m: f64) -> anyhow::Result<Self> {
         use anyhow::Context;
         // The readers filter by the envelope of all boxes; features are
@@ -355,7 +400,11 @@ impl SourceIndex {
         let h = &config.harbour;
         let mut builder =
             SourceIndexBuilder::new(h.harbour_point_buffer_m, h.ferry_terminal_buffer_m)
-                .with_fairway_width(config.water.tidal_fairway_width_m);
+                .with_fairway_width(config.water.tidal_fairway_width_m)
+                .with_ship_routes(
+                    config.routing.ship_fairway_width_m,
+                    config.routing.separation_lane_width_m,
+                );
         let src = &config.sources;
         let reader = ShapefileReader::open(&src.water_polygons, SourceClass::Sea, envelope)
             .with_context(|| format!("opening {}", src.water_polygons.display()))?;
@@ -383,8 +432,8 @@ impl SourceIndex {
         Ok(builder.build())
     }
 
-    /// Number of polygons, points and corridor lines (passages and
-    /// fairways).
+    /// Number of polygons, points and corridor lines (passages, fairways
+    /// and ship routes).
     pub fn counts(&self) -> (usize, usize, usize) {
         (self.polygons.len(), self.points.len(), self.lines.len())
     }

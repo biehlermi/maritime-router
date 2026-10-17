@@ -4,7 +4,7 @@ use geo::{Contains, Coord, LineString, Point, Polygon, Rect, unary_union};
 use maritime_router_core::grid::CellId;
 
 use super::edt::{self, Metric};
-use super::index::{CorridorLine, Item, Layer, SourceIndex};
+use super::index::{CorridorLine, Item, Layer, LineKind, SourceIndex};
 use super::scan::{Mask, supercover_segment};
 use super::window::TileWindow;
 use super::{Pixel, PixelClass, RasterParams, TileRaster, TileResult};
@@ -33,10 +33,10 @@ pub fn process_tile(index: &SourceIndex, params: &RasterParams, tile: CellId) ->
         };
     }
     // Harbour regions and passage corridors get the finest raster (fairways
-    // don't).
+    // and ship routes don't).
     let harbour = items.iter().any(|&(item, _)| match item {
         Item::Point(_) => true,
-        Item::Line(i) => index.lines[i as usize].passage.is_some(),
+        Item::Line(i) => index.lines[i as usize].passage().is_some(),
         Item::Polygon(i) => matches!(
             index.polygons[i as usize].layer,
             Layer::HarbourArea | Layer::FerryArea | Layer::PassageArea
@@ -80,8 +80,9 @@ pub fn process_tile(index: &SourceIndex, params: &RasterParams, tile: CellId) ->
             Layer::TidalFlat => !params.exclude_tidal_flats,
             _ => false,
         },
-        // A fairway only matters across tidal flats.
-        Item::Line(i) => index.lines[i as usize].passage.is_none(),
+        // A fairway only matters across tidal flats, and a ship route only
+        // near a shore (open water has no shore penalty).
+        Item::Line(i) => index.lines[i as usize].passage().is_none(),
         Item::Point(_) => false,
     });
     if only_sea && !rings_reach_window(&union_rings, win.w, win.h) {
@@ -174,13 +175,16 @@ fn rasterise(
     // Fairways keep a corridor open through the flats: pixels entirely
     // inside it and those its centre line touches.
     let mut fairway = Mask::new(w, h);
-    if flat.any() {
-        for &(item, shift) in items {
-            let Item::Line(i) = item else { continue };
-            let line = &index.lines[i as usize];
-            if line.passage.is_none() {
+    let mut route = Mask::new(w, h);
+    for &(item, shift) in items {
+        let Item::Line(i) = item else { continue };
+        let line = &index.lines[i as usize];
+        match line.kind {
+            LineKind::TidalFairway if flat.any() => {
                 corridor_pixels(win, line, shift, |p| fairway.bits[p] = true);
             }
+            LineKind::ShipRoute => corridor_pixels(win, line, shift, |p| route.bits[p] = true),
+            _ => {}
         }
     }
 
@@ -240,7 +244,7 @@ fn rasterise(
     for &(item, shift) in items {
         let Item::Line(i) = item else { continue };
         let line = &index.lines[i as usize];
-        if let Some(passage) = line.passage {
+        if let Some(passage) = line.passage() {
             let passage = Pixel::passage_pixel(passage);
             corridor_pixels(win, line, shift, |p| pixels[p] = passage);
         }
@@ -265,12 +269,26 @@ fn rasterise(
     if win.level > params.coast_level {
         coarsen_outside_harbours(&mut pixels, &fairway.bits, win, params.coast_level);
     }
+    // Ship routes, except across tidal flats (small-craft channels).
+    for p in route.iter_ones() {
+        if pixels[p].is_navigable() && !flat.bits[p] {
+            pixels[p] = pixels[p].with_ship_route(true);
+        }
+    }
 
     // Shore distance and channel width on the final classes.
     let blocked: Vec<bool> = pixels.iter().map(|p| !p.is_navigable()).collect();
     let dist = edt::distances(&blocked, w, h, metric);
     let px_m = metric.pixel_size();
-    let (width, width_sat) = channel_width(&dist, &blocked, w, h, metric, params.halo_m);
+    let (width, width_sat, width_max) = channel_width(
+        &dist,
+        &blocked,
+        w,
+        h,
+        metric,
+        params.halo_m,
+        params.width_resolve_m,
+    );
 
     // Crop to the core.
     let size = win.size;
@@ -297,6 +315,7 @@ fn rasterise(
         half_diagonal_m: metric.half_diagonal() as f32,
         saturation_m: sat,
         width_saturation_m: width_sat,
+        width_max_m: width_max,
     }
 }
 
@@ -406,7 +425,9 @@ fn opening(d: &[f32], r: f64, w: usize, h: usize, metric: Metric) -> Vec<bool> {
         .collect()
 }
 
-/// Local channel width (see [`TileRaster::width_m`]) and its saturation.
+/// Local channel width (see [`TileRaster::width_m`]), the widest disk the
+/// halo contains and the widest disk of the series: disks up to the halo,
+/// then on until one is at least `resolve_m` wide.
 fn channel_width(
     dist: &[f32],
     blocked: &[bool],
@@ -414,18 +435,22 @@ fn channel_width(
     h: usize,
     metric: Metric,
     halo_m: f64,
-) -> (Vec<f32>, f32) {
+    resolve_m: f64,
+) -> (Vec<f32>, f32, f32) {
     let px = metric.pixel_size();
     let mut width: Vec<f32> = blocked
         .iter()
         .map(|&b| if b { 0.0 } else { px as f32 })
         .collect();
     let mut r = px;
-    let mut saturation = px as f32;
+    let (mut saturation, mut max) = (px as f32, px);
     let no_land = !blocked.iter().any(|&b| b);
-    while 2.0 * r <= halo_m {
+    while 2.0 * r <= halo_m || max < resolve_m {
         let d = 2.0 * r;
-        saturation = d as f32;
+        if d <= halo_m {
+            saturation = d as f32;
+        }
+        max = d;
         if no_land {
             width.fill(d as f32);
         } else {
@@ -444,7 +469,7 @@ fn channel_width(
         }
         r *= 2.0;
     }
-    (width, saturation)
+    (width, saturation, max as f32)
 }
 
 /// Pixels entirely inside the rings: centre inside and not touched by an

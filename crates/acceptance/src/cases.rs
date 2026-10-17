@@ -25,6 +25,12 @@
 //!         - { name: …, polygon: [[lon, lat], …] }
 //!       uses_passages: [kiel]
 //!       not_passages: [kiel]
+//!       any_of:                     # at least one alternative must hold in full
+//!         - name: Åland Sea
+//!           passes_near: [{ name: …, lat: …, lon: …, radius_m: … }]
+//!         - name: south of Åland
+//!           passes_near: [ … ]
+//!           avoids: [ … ]
 //!       distance_nm:
 //!         value: 455
 //!         tolerance: 0.10           # optional, else the default
@@ -150,10 +156,28 @@ pub struct Expectations {
     pub uses_passages: Vec<String>,
     /// Passages the route must not use.
     pub not_passages: Vec<String>,
+    /// Alternative routes: the route must satisfy every point and area of
+    /// at least one of them (for cases where more than one route is
+    /// plausible).
+    pub any_of: Vec<Alternative>,
     /// Reference distance.
     pub distance_nm: Option<ReferenceDistance>,
     /// The error code the route must fail with.
     pub error: Option<String>,
+}
+
+/// One alternative of an `any_of` expectation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Alternative {
+    /// What the alternative is, e.g. `Åland Sea route`.
+    pub name: String,
+    /// Points this alternative passes near.
+    #[serde(default)]
+    pub passes_near: Vec<Near>,
+    /// Areas this alternative stays out of.
+    #[serde(default)]
+    pub avoids: Vec<Area>,
 }
 
 /// A point the route must pass within `radius_m` of.
@@ -270,7 +294,7 @@ impl CaseFile {
 
     /// Everything that breaks a rule: unique IDs, valid coordinates,
     /// positive radii, tolerances in (0, 1), areas with exactly one shape,
-    /// known error codes.
+    /// known error codes, `any_of` with named, non-empty alternatives.
     pub fn problems(&self) -> Vec<String> {
         let mut out = Vec::new();
         let tol_ok = |t: f64| t.is_finite() && t > 0.0 && t < 1.0;
@@ -302,26 +326,22 @@ impl CaseFile {
                 }
             }
             let e = &case.expect;
-            for n in &e.passes_near {
-                let valid = LatLon::new(n.lat, n.lon).is_valid() && n.radius_m > 0.0;
-                if !valid {
-                    out.push(format!("case {id}: passes_near {:?} is invalid", n.name));
+            check_places(&format!("case {id}"), &e.passes_near, &e.avoids, &mut out);
+            let mut names = HashSet::new();
+            for alt in &e.any_of {
+                let ctx = format!("case {id}: any_of {:?}", alt.name);
+                if alt.passes_near.is_empty() && alt.avoids.is_empty() {
+                    out.push(format!("{ctx} needs passes_near or avoids"));
                 }
+                if !names.insert(alt.name.as_str()) {
+                    out.push(format!("{ctx}: duplicate name"));
+                }
+                check_places(&ctx, &alt.passes_near, &alt.avoids, &mut out);
             }
-            for a in &e.avoids {
-                let valid = match (&a.circle, &a.polygon) {
-                    (Some(c), None) => LatLon::new(c.lat, c.lon).is_valid() && c.radius_m > 0.0,
-                    (None, Some(ring)) => {
-                        ring.len() >= 3 && ring.iter().all(|p| LatLon::new(p[1], p[0]).is_valid())
-                    }
-                    _ => false,
-                };
-                if !valid {
-                    out.push(format!(
-                        "case {id}: avoids {:?} needs one valid circle or polygon",
-                        a.name
-                    ));
-                }
+            if e.any_of.len() == 1 {
+                out.push(format!(
+                    "case {id}: any_of needs at least two alternatives (use passes_near and avoids for one)"
+                ));
             }
             if let Some(d) = &e.distance_nm {
                 if !(d.value.is_finite() && d.value >= 0.0) {
@@ -340,6 +360,32 @@ impl CaseFile {
             }
         }
         out
+    }
+}
+
+/// Problems with `passes_near` points and `avoids` areas, prefixed with
+/// `ctx`.
+fn check_places(ctx: &str, near: &[Near], avoids: &[Area], out: &mut Vec<String>) {
+    for n in near {
+        let valid = LatLon::new(n.lat, n.lon).is_valid() && n.radius_m > 0.0;
+        if !valid {
+            out.push(format!("{ctx}: passes_near {:?} is invalid", n.name));
+        }
+    }
+    for a in avoids {
+        let valid = match (&a.circle, &a.polygon) {
+            (Some(c), None) => LatLon::new(c.lat, c.lon).is_valid() && c.radius_m > 0.0,
+            (None, Some(ring)) => {
+                ring.len() >= 3 && ring.iter().all(|p| LatLon::new(p[1], p[0]).is_valid())
+            }
+            _ => false,
+        };
+        if !valid {
+            out.push(format!(
+                "{ctx}: avoids {:?} needs one valid circle or polygon",
+                a.name
+            ));
+        }
     }
 }
 
@@ -379,6 +425,13 @@ cases:
         - { name: Wight, circle: { lat: 50.67, lon: -1.3, radius_m: 5000 } }
         - { name: Box, polygon: [[0, 0], [1, 0], [1, 1]] }
       not_passages: [kiel]
+      any_of:
+        - name: north
+          passes_near:
+            - { name: N, lat: 52.0, lon: 2.0, radius_m: 1000 }
+        - name: south
+          avoids:
+            - { name: S, circle: { lat: 50.0, lon: 0.0, radius_m: 1000 } }
       distance_nm:
         value: 455
         reference: Pub. 151
@@ -400,6 +453,9 @@ cases:
         assert_eq!(c.spec_case, Some(1));
         assert_eq!(c.expect.avoids.len(), 2);
         assert_eq!(c.expect.distance_nm.as_ref().unwrap().tolerance, None);
+        assert_eq!(c.expect.any_of.len(), 2);
+        assert_eq!(c.expect.any_of[0].passes_near[0].name, "N");
+        assert_eq!(c.expect.any_of[1].avoids[0].name, "S");
         let req = c.request();
         assert_eq!(req.avoid, ["kiel"]);
         assert_eq!(req.waypoints[1], LatLon::new(50.9, -1.4));
@@ -418,6 +474,17 @@ cases:
             ),
             EXAMPLE.replace("title: Caspian", "title: Caspian\n    typo: 1"),
             EXAMPLE.replace("id: err", "id: e/r"),
+            // any_of: duplicate names, an empty alternative, bad radius, one alternative.
+            EXAMPLE.replace("name: south", "name: north"),
+            EXAMPLE.replace(
+                "          avoids:\n            - { name: S, circle: { lat: 50.0, lon: 0.0, radius_m: 1000 } }\n",
+                "",
+            ),
+            EXAMPLE.replace("lon: 2.0, radius_m: 1000", "lon: 2.0, radius_m: 0"),
+            EXAMPLE.replace(
+                "        - name: south\n          avoids:\n            - { name: S, circle: { lat: 50.0, lon: 0.0, radius_m: 1000 } }\n",
+                "",
+            ),
         ];
         for text in &bad {
             assert!(CaseFile::parse(text, "t").is_err(), "{text}");

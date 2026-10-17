@@ -12,7 +12,9 @@ use std::fmt;
 
 use geo::{BoundingRect, Geometry, Intersects, Rect};
 
-pub use self::geojsonseq::{GeoJsonSeqReader, GeoJsonSeqStats, classify_tags};
+pub use self::geojsonseq::{
+    GeoJsonSeqReader, GeoJsonSeqStats, SHIP_ROUTE_MIN_DEPTH_M, classify_tags,
+};
 pub use self::shapefile::ShapefileReader;
 
 /// What a source feature contributes to the water model.
@@ -41,11 +43,21 @@ pub enum SourceClass {
     /// Fairway centre lines (`waterway=fairway`): a corridor of
     /// `tidal_fairway_width_m` along them stays open through tidal flats.
     Fairway = 7,
+    /// Centre lines of channels for ships: fairways that are not canoe
+    /// routes, small inland waterways or stated to be shallow (see
+    /// [`classify_tags`]), and recommended tracks
+    /// (`seamark:type=recommended_track`). Water along them gets a reduced
+    /// shore penalty (`routing.ship_fairway_width_m`).
+    ShipFairway = 8,
+    /// Traffic separation scheme lanes (`seamark:type=separation_lane`,
+    /// mapped as lines along the lane): a reduced shore penalty within
+    /// `routing.separation_lane_width_m`.
+    SeparationLane = 9,
 }
 
 impl SourceClass {
     /// All classes in declaration order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
         Self::Sea,
         Self::Land,
         Self::InlandWater,
@@ -54,6 +66,8 @@ impl SourceClass {
         Self::FerryTerminal,
         Self::TidalFlat,
         Self::Fairway,
+        Self::ShipFairway,
+        Self::SeparationLane,
     ];
 
     /// Stable lower-case name, used in logs and statistics.
@@ -67,12 +81,17 @@ impl SourceClass {
             Self::FerryTerminal => "ferry_terminal",
             Self::TidalFlat => "tidal_flat",
             Self::Fairway => "fairway",
+            Self::ShipFairway => "ship_fairway",
+            Self::SeparationLane => "separation_lane",
         }
     }
 
     /// Whether this class only makes sense for lines.
     pub fn requires_line(self) -> bool {
-        self == Self::Fairway
+        matches!(
+            self,
+            Self::Fairway | Self::ShipFairway | Self::SeparationLane
+        )
     }
 
     /// Whether this class only makes sense for areas (not points or lines).
@@ -93,7 +112,7 @@ impl fmt::Display for SourceClass {
 /// A small set of [`SourceClass`]es. One OSM feature can be several things
 /// at once, for example harbour water inside a harbour area.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub struct ClassSet(u8);
+pub struct ClassSet(u16);
 
 impl ClassSet {
     /// The empty set.
@@ -156,7 +175,7 @@ pub struct SourceFeature {
     pub classes: ClassSet,
     /// Geometry in WGS84 longitude/latitude degrees: `Point`, `MultiPoint`,
     /// `Polygon` or `MultiPolygon`; `LineString` or `MultiLineString` for
-    /// fairways.
+    /// fairways and ship routes.
     pub geometry: Geometry<f64>,
 }
 

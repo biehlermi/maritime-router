@@ -221,7 +221,7 @@ cases:
   - id: 15-stockholm-helsinki
     spec_case: 15
     title: Stockholm → Helsinki
-    description: Through the Stockholm archipelago and the Åland Sea.
+    description: Through the Stockholm archipelago, then either the Åland Sea or the Sandhamn exit and the Baltic south of Åland.
     waypoints:
       - name: Stockholm Cruise Center Frihamnen (Magasin 9)
         lat: 59.345507
@@ -232,8 +232,17 @@ cases:
         lon: 24.958816
         source: OSM way 327321393 "Olympiaterminaali"; Portolo "Helsinki" 5 m away
     expect:
-      passes_near:
-        - { name: Åland Sea, lat: 60.0, lon: 19.4, radius_m: 25000 }
+      # Owner decision (Phase 1): both routes ships take are acceptable, the
+      # Åland Sea route north of Åland (spec §9) and the Sandhamn exit with
+      # the open Baltic south of Åland.
+      any_of:
+        - name: Åland Sea route
+          passes_near:
+            - { name: Åland Sea, lat: 60.0, lon: 19.4, radius_m: 25000 }
+        - name: Sandhamn route south of Åland
+          passes_near:
+            - { name: Sandhamn, lat: 59.28, lon: 18.92, radius_m: 3000 }
+            - { name: Baltic south of Åland, lat: 59.5, lon: 20.8, radius_m: 30000 }
       distance_nm:
         value: 239
         reference: NGA Pub. 151 (2001), Stockholm table, Helsinki

@@ -685,6 +685,47 @@
      ]
     ]
    }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "id": "limfjord_aggersund",
+    "effect": "force_blocked",
+    "reason": "The Limfjord is sea in the coastline data and connects the North Sea (Thyboron) with the Kattegat (Hals), but it is a small-craft waterway: about 4 m maximum draught through the dredged channel at Logstor and opening bridges at Aggersund, Aalborg, Oddesund and Vilsund. Seagoing ships of the size this router is for go round Skagen. Without this block the PR 9 channel-centring penalty makes the Limfjord the shortest route between the North Sea and the Kattegat (spec case 2 with avoid kiel). The block crosses the sound at the Aggersund bascule bridge, between Logstor and Aalborg, so Aalborg stays reachable from the Kattegat and the western Limfjord ports (Thyboron, Struer, Thisted, Logstor) from the North Sea.",
+    "source": [
+     "Bridge position: OpenStreetMap way 379109409 (man_made=bridge, Aggersundbroen) and way 339916465 (bridge:movable=bascule); OpenStreetMap contributors (ODbL), Geofabrik extract of 2026-10-15. The rectangle follows the bridge axis, extended 200 m onto land at both ends, 80 m wide."
+    ],
+    "note": "Like every force_blocked area, every pixel it touches is blocked; the parts on land change nothing."
+   },
+   "geometry": {
+    "type": "MultiPolygon",
+    "coordinates": [
+     [
+      [
+       [
+        9.2904982,
+        57.0016725
+       ],
+       [
+        9.2984077,
+        56.9977701
+       ],
+       [
+        9.2975218,
+        56.9972375
+       ],
+       [
+        9.2896123,
+        57.0011399
+       ],
+       [
+        9.2904982,
+        57.0016725
+       ]
+      ]
+     ]
+    ]
+   }
   }
  ]
 }

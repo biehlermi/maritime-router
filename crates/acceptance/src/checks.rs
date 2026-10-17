@@ -6,7 +6,7 @@ use maritime_router_core::grid::{Point3, closest_on_arc, move_towards};
 use maritime_router_core::route::{Leg, Route, RouteError};
 use serde::{Deserialize, Serialize};
 
-use crate::cases::{Area, Case, Defaults};
+use crate::cases::{Alternative, Area, Case, Defaults, Near};
 
 /// The outcome of one check.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -131,6 +131,71 @@ fn enters(area: &Area, lines: &[Vec<LatLon>]) -> Option<String> {
     None
 }
 
+/// The `passes_near` check of one point against the full leg lines.
+pub fn near_check(n: &Near, full: &[Vec<LatLon>]) -> Check {
+    let p = LatLon::new(n.lat, n.lon);
+    let d = full
+        .iter()
+        .map(|l| distance_to_line_m(p, l))
+        .fold(f64::INFINITY, f64::min);
+    Check::new(
+        format!("passes_near {}", n.name),
+        d <= n.radius_m,
+        format!("closest {d:.0} m (radius {:.0} m)", n.radius_m),
+    )
+}
+
+/// The `avoids` check of one area against the water parts of the legs.
+pub fn avoid_check(a: &Area, water: &[Vec<LatLon>]) -> Check {
+    let hit = enters(a, water);
+    Check::new(
+        format!("avoids {}", a.name),
+        hit.is_none(),
+        hit.unwrap_or_else(|| "not entered".to_owned()),
+    )
+}
+
+/// The checks of one `any_of` alternative.
+pub fn alternative_checks(
+    alt: &Alternative,
+    full: &[Vec<LatLon>],
+    water: &[Vec<LatLon>],
+) -> Vec<Check> {
+    alt.passes_near
+        .iter()
+        .map(|n| near_check(n, full))
+        .chain(alt.avoids.iter().map(|a| avoid_check(a, water)))
+        .collect()
+}
+
+/// The `any_of` check: passes if every check of at least one alternative
+/// passes; the detail lists each alternative's checks.
+fn any_of_check(alts: &[Alternative], full: &[Vec<LatLon>], water: &[Vec<LatLon>]) -> Check {
+    let mut passed = false;
+    let mut details = Vec::new();
+    for alt in alts {
+        let checks = alternative_checks(alt, full, water);
+        let ok = checks.iter().all(|c| c.passed);
+        passed |= ok;
+        let parts: Vec<String> = checks
+            .iter()
+            .map(|c| format!("{}: {}", c.name, c.detail))
+            .collect();
+        details.push(format!(
+            "{} {} ({})",
+            alt.name,
+            if ok { "holds" } else { "fails" },
+            parts.join(", ")
+        ));
+    }
+    let names: Vec<&str> = alts.iter().map(|a| a.name.as_str()).collect();
+    Check::new(
+        format!("any_of {}", names.join(" | ")),
+        passed,
+        details.join("; "),
+    )
+}
+
 /// Checks the case's expectations (not the land checks) against a result.
 pub fn expectation_checks(
     case: &Case,
@@ -161,25 +226,10 @@ pub fn expectation_checks(
     let mut out = Vec::new();
     let full: Vec<Vec<LatLon>> = route.legs.iter().map(|l| l.geometry.points()).collect();
     let water: Vec<Vec<LatLon>> = route.legs.iter().map(water_part).collect();
-    for n in &e.passes_near {
-        let p = LatLon::new(n.lat, n.lon);
-        let d = full
-            .iter()
-            .map(|l| distance_to_line_m(p, l))
-            .fold(f64::INFINITY, f64::min);
-        out.push(Check::new(
-            format!("passes_near {}", n.name),
-            d <= n.radius_m,
-            format!("closest {d:.0} m (radius {:.0} m)", n.radius_m),
-        ));
-    }
-    for a in &e.avoids {
-        let hit = enters(a, &water);
-        out.push(Check::new(
-            format!("avoids {}", a.name),
-            hit.is_none(),
-            hit.unwrap_or_else(|| "not entered".to_owned()),
-        ));
+    out.extend(e.passes_near.iter().map(|n| near_check(n, &full)));
+    out.extend(e.avoids.iter().map(|a| avoid_check(a, &water)));
+    if !e.any_of.is_empty() {
+        out.push(any_of_check(&e.any_of, &full, &water));
     }
     let used: Vec<&str> = route
         .legs
@@ -257,6 +307,38 @@ mod tests {
         assert!(dense.windows(2).all(|w| distance_m(w[0], w[1]) <= 1010.0));
         assert_eq!(dense.first(), line.first());
         assert_eq!(dense.last(), line.last());
+    }
+
+    #[test]
+    fn any_of_needs_one_whole_alternative() {
+        let near = |name: &str, lat: f64, lon: f64| Near {
+            name: name.into(),
+            lat,
+            lon,
+            radius_m: 2000.0,
+        };
+        let line = vec![vec![LatLon::new(0.0, 0.0), LatLon::new(0.0, 1.0)]];
+        let alt = |name: &str, points: Vec<Near>| Alternative {
+            name: name.into(),
+            passes_near: points,
+            avoids: Vec::new(),
+        };
+        let on = alt("on", vec![near("a", 0.01, 0.2), near("b", 0.0, 0.9)]);
+        let half = alt("half", vec![near("a", 0.01, 0.2), near("c", 1.0, 0.5)]);
+        let off = alt("off", vec![near("c", 1.0, 0.5)]);
+        let mut avoid = alt("avoiding", Vec::new());
+        avoid.avoids.push(Area {
+            name: "box".into(),
+            circle: None,
+            polygon: Some(vec![[0.4, -0.1], [0.6, -0.1], [0.6, 0.1], [0.4, 0.1]]),
+        });
+        let check = any_of_check(&[half.clone(), on], &line, &line);
+        assert!(check.passed, "{check:?}");
+        assert_eq!(check.name, "any_of half | on");
+        assert!(check.detail.starts_with("half fails"), "{}", check.detail);
+        assert!(!any_of_check(&[half, off.clone()], &line, &line).passed);
+        // An avoids-only alternative fails when the route enters its area.
+        assert!(!any_of_check(&[off, avoid], &line, &line).passed);
     }
 
     #[test]

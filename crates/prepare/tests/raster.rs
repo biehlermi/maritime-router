@@ -80,6 +80,7 @@ fn params(tile_level: u8, harbour_level: u8) -> RasterParams {
         harbour_min_width_m: 100.0,
         include_lakes: false,
         exclude_tidal_flats: true,
+        width_resolve_m: 0.0,
     }
 }
 
@@ -256,6 +257,88 @@ fn classes_width_rules_and_curated_data() {
     assert_eq!(at(&r, frame, 1800.0, 0.0).2, 0.0);
     // Far from land, distances saturate at the halo.
     assert!(r.shore_m.iter().all(|&d| d <= 2000.0));
+    assert_eq!(r.width_max_m, r.width_saturation_m);
+
+    // Resolving widths beyond the halo: the series goes on until a disk is
+    // at least 3 km wide; channels are unchanged.
+    let wide = RasterParams {
+        width_resolve_m: 3000.0,
+        ..params(10, 18)
+    };
+    let r2 = raster(process_tile(&index, &wide, tile));
+    assert_eq!(r2.width_saturation_m, r.width_saturation_m);
+    assert!(r2.width_max_m >= 3000.0 && r2.width_max_m < 2.0 * 3000.0);
+    assert_eq!(at(&r2, frame, -500.0, 1500.0).2, r2.width_max_m);
+    assert_eq!(
+        at(&r2, frame, 2200.0, -2000.0).2,
+        at(&r, frame, 2200.0, -2000.0).2
+    );
+    assert_eq!(r2.pixels, r.pixels);
+}
+
+#[test]
+fn ship_routes_flag_water_but_not_flats() {
+    // Sea west of x = 3000 m with a flat at x 0..2000, y -2000..2000; a ship
+    // fairway along y = 0 from the open sea over the flat onto land, and a
+    // tidal fairway along it (so the flat is open there).
+    let tile = scene_tile();
+    let frame = frame_of(tile);
+    let line = || LineString(vec![frame.coord(-4000.0, 0.0), frame.coord(4000.0, 0.0)]);
+    let mut b = SourceIndexBuilder::new(0.0, 0.0)
+        .with_fairway_width(100.0)
+        .with_ship_routes(300.0, 1000.0);
+    b.add_feature(&feature(
+        SourceClass::Sea,
+        frame.rect(-20_000.0, -20_000.0, 3000.0, 20_000.0).into(),
+    ));
+    b.add_feature(&feature(
+        SourceClass::TidalFlat,
+        frame.rect(0.0, -2000.0, 2000.0, 2000.0).into(),
+    ));
+    let mut fw = feature(SourceClass::Fairway, line().into());
+    fw.classes.insert(SourceClass::ShipFairway);
+    b.add_feature(&fw);
+    // A separation lane further north, entirely in open water.
+    b.add_feature(&feature(
+        SourceClass::SeparationLane,
+        LineString(vec![
+            frame.coord(-4000.0, 3000.0),
+            frame.coord(-1000.0, 3000.0),
+        ])
+        .into(),
+    ));
+    let r = raster(process_tile(&b.build(), &params(10, 18), tile));
+    let px = |x: f64, y: f64| at(&r, frame, x, y).0;
+    // In open water within 150 m of the fairway: flagged.
+    assert!(px(-2000.0, 0.0).on_ship_route());
+    assert!(px(-2000.0, 100.0).on_ship_route());
+    assert!(!px(-2000.0, 250.0).on_ship_route());
+    // Across the flat the tidal corridor is open but no ship route.
+    assert_eq!(px(1000.0, 0.0).class(), PixelClass::Sea);
+    assert!(!px(1000.0, 0.0).on_ship_route());
+    // Never on land.
+    assert!(!px(3500.0, 0.0).on_ship_route());
+    assert!(!px(3500.0, 0.0).is_navigable());
+    // The lane's corridor is 1000 m wide.
+    assert!(px(-2500.0, 3400.0).on_ship_route());
+    assert!(!px(-2500.0, 3600.0).on_ship_route());
+    // Ship routes don't change classes, distances or widths.
+    let mut b = SourceIndexBuilder::new(0.0, 0.0).with_fairway_width(100.0);
+    b.add_feature(&feature(
+        SourceClass::Sea,
+        frame.rect(-20_000.0, -20_000.0, 3000.0, 20_000.0).into(),
+    ));
+    b.add_feature(&feature(
+        SourceClass::TidalFlat,
+        frame.rect(0.0, -2000.0, 2000.0, 2000.0).into(),
+    ));
+    b.add_feature(&feature(SourceClass::Fairway, line().into()));
+    let plain = raster(process_tile(&b.build(), &params(10, 18), tile));
+    let strip = |r: &TileRaster| -> Vec<Pixel> {
+        r.pixels.iter().map(|p| p.with_ship_route(false)).collect()
+    };
+    assert_eq!(strip(&r), strip(&plain));
+    assert_eq!((&r.shore_m, &r.width_m), (&plain.shore_m, &plain.width_m));
 }
 
 #[test]

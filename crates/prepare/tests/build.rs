@@ -143,6 +143,7 @@ fn raster_params() -> RasterParams {
         harbour_min_width_m: 30.0,
         include_lakes: false,
         exclude_tidal_flats: true,
+        width_resolve_m: 2400.0,
     }
 }
 
@@ -153,6 +154,8 @@ fn leaf_params(r: &RasterParams) -> LeafParams {
         cells_across_channel: 4.0,
         ocean_min_cell_m: 2400.0,
         uniform_shore_m: r.halo_m,
+        route_cell_m: 0.0,
+        penalty_band_m: 1000.0,
     }
 }
 
@@ -182,6 +185,7 @@ fn build_scene_with(force_lake: bool, min_sea_component_m2: f64) -> Built {
         &leaf_params(&r),
         build::GraphParams {
             min_sea_component_m2,
+            penalty: build::Penalty::shore_only(1000.0, 3.0),
         },
         &tiles,
         meta,
@@ -419,6 +423,7 @@ fn narrow_diagonal_corridor_connects() {
         &leaf_params(&r),
         build::GraphParams {
             min_sea_component_m2: 0.0,
+            penalty: build::Penalty::shore_only(3704.0, 3.0),
         },
         &tiles,
         GraphMeta::new("test"),
@@ -471,6 +476,7 @@ fn override_fills_a_gap_between_water_polygons() {
             &leaf_params(&r),
             build::GraphParams {
                 min_sea_component_m2: 0.0,
+                penalty: build::Penalty::shore_only(3704.0, 3.0),
             },
             &tiles,
             GraphMeta::new("test"),
@@ -549,6 +555,7 @@ fn tidal_flats_leave_only_the_channel() {
             &leaf_params(&r),
             build::GraphParams {
                 min_sea_component_m2: 100_000.0,
+                penalty: build::Penalty::shore_only(3704.0, 3.0),
             },
             &tiles,
             GraphMeta::new("test"),
@@ -659,6 +666,7 @@ fn fairway_reaches_a_harbour_behind_a_flat() {
             &leaf_params(&r),
             build::GraphParams {
                 min_sea_component_m2: 100_000.0,
+                penalty: build::Penalty::shore_only(3704.0, 3.0),
             },
             &tiles,
             GraphMeta::new("test"),

@@ -44,6 +44,14 @@
 //!    navigable, and fairway pixels keep their detail in step 6. Passage
 //!    corridors and `force_navigable` overrides (step 5) also win over
 //!    flats.
+//!
+//!    **Ship routes**: navigable pixels within half a corridor width of a
+//!    ship fairway or recommended track (`routing.ship_fairway_width_m`) or
+//!    a traffic separation lane (`routing.separation_lane_width_m`) get the
+//!    ship-route flag ([`Pixel::on_ship_route`]), which lowers their shore
+//!    penalty (see [`crate::build::Penalty`]). Not on tidal flats that a
+//!    fairway corridor keeps open: those channels are for small craft at
+//!    high water.
 //! 4. **Width rules.** A morphological opening (erosion, then dilation, on
 //!    all water) removes inland water narrower than `inland_min_width_m`
 //!    and harbour water narrower than `harbour_min_width_m`
@@ -69,7 +77,8 @@
 //! 7. **Distances.** A Euclidean distance transform ([`edt`], Felzenszwalb
 //!    with the true local metric) gives each pixel's distance to the nearest
 //!    non-navigable pixel, saturating at the halo, and a granulometry (a
-//!    series of openings) gives the local channel width.
+//!    series of openings) gives the local channel width, up to at least
+//!    [`RasterParams::width_resolve_m`].
 //!
 //! The result per tile is a [`TileResult`]: either a uniform tile (open sea,
 //! inland, no shore within the halo) or a [`TileRaster`] of the core pixels.
@@ -174,16 +183,19 @@ impl PixelClass {
     }
 }
 
-/// One pixel: a class, the passage index for passage pixels, and whether
-/// the pixel lies in a harbour region (where the finest cells are built,
-/// whatever the class). Packed into one byte: bits 0–4 hold the class code
-/// (classes 0–9 as is, passages as 16 + index), bit 7 the harbour flag.
+/// One pixel: a class, the passage index for passage pixels, whether the
+/// pixel lies in a harbour region (where the finest cells are built,
+/// whatever the class) and whether it lies on a ship route (a reduced shore
+/// penalty). Packed into one byte: bits 0–4 hold the class code (classes
+/// 0–9 as is, passages as 16 + index), bit 6 the ship-route flag, bit 7 the
+/// harbour flag.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(transparent)]
 pub struct Pixel(u8);
 
 const PASSAGE_BASE: u8 = 16;
 const HARBOUR_FLAG: u8 = 0x80;
+const SHIP_ROUTE_FLAG: u8 = 0x40;
 const CODE_MASK: u8 = 0x1f;
 
 impl Pixel {
@@ -237,6 +249,21 @@ impl Pixel {
         }
     }
 
+    /// Whether the pixel lies on a ship route (see the module docs, step 3).
+    pub fn on_ship_route(self) -> bool {
+        self.0 & SHIP_ROUTE_FLAG != 0
+    }
+
+    /// This pixel with the ship-route flag set or cleared.
+    #[must_use]
+    pub fn with_ship_route(self, on: bool) -> Self {
+        if on {
+            Self(self.0 | SHIP_ROUTE_FLAG)
+        } else {
+            Self(self.0 & !SHIP_ROUTE_FLAG)
+        }
+    }
+
     /// Whether ships may enter the pixel (see [`PixelClass::is_navigable`]).
     pub fn is_navigable(self) -> bool {
         self.class().is_navigable()
@@ -256,6 +283,9 @@ impl std::fmt::Debug for Pixel {
         }
         if self.in_harbour_region() {
             f.write_str("+harbour")?;
+        }
+        if self.on_ship_route() {
+            f.write_str("+route")?;
         }
         Ok(())
     }
@@ -286,8 +316,11 @@ pub struct TileRaster {
     /// diameter of the largest disk from the series
     /// `2^k * pixel_size_m` (k ≥ 1) that contains the pixel and lies in
     /// navigable water, so a lower bound within a factor of 2; 1 px for
-    /// pixels in channels narrower than 2 px. Saturates at
-    /// [`TileRaster::width_saturation_m`].
+    /// pixels in channels narrower than 2 px. The series runs up to
+    /// [`TileRaster::width_max_m`]; widths up to
+    /// [`TileRaster::width_saturation_m`] (disks within the halo) are exact
+    /// in that sense, wider ones may be overestimated next to the window
+    /// edge, where land beyond the window is not seen.
     pub width_m: Vec<f32>,
     /// Nominal pixel edge in metres (square root of the pixel area).
     pub pixel_size_m: f32,
@@ -295,8 +328,12 @@ pub struct TileRaster {
     pub half_diagonal_m: f32,
     /// Where `shore_m` saturates (the halo).
     pub saturation_m: f32,
-    /// Where `width_m` saturates.
+    /// The widest disk of the series that the halo fully contains; the
+    /// leaf width rule treats wider channels as open water.
     pub width_saturation_m: f32,
+    /// The widest disk of the series (at least
+    /// [`RasterParams::width_resolve_m`]): `width_m` saturates here.
+    pub width_max_m: f32,
 }
 
 impl TileRaster {
@@ -366,6 +403,10 @@ pub struct RasterParams {
     pub include_lakes: bool,
     /// Whether tidal flats are blocked.
     pub exclude_tidal_flats: bool,
+    /// Channel widths are resolved up to at least this (metres): twice
+    /// `routing.shore_preferred_distance_m`, where the shore penalty stops
+    /// depending on the width.
+    pub width_resolve_m: f64,
 }
 
 impl RasterParams {
@@ -391,6 +432,7 @@ impl RasterParams {
             harbour_min_width_m: config.water.harbour_min_width_m,
             include_lakes: config.water.include_lakes,
             exclude_tidal_flats: config.water.exclude_tidal_flats,
+            width_resolve_m: 2.0 * config.routing.shore_preferred_distance_m,
         }
     }
 }
@@ -412,6 +454,10 @@ mod tests {
             assert!(h.in_harbour_region());
             assert_eq!(h.class(), class);
             assert_eq!(h.with_harbour_region(false), p);
+            let r = h.with_ship_route(true);
+            assert!(r.on_ship_route() && r.in_harbour_region());
+            assert_eq!(r.class(), class);
+            assert_eq!(r.with_ship_route(false), h);
         }
         for i in 0..16 {
             let p = Pixel::passage_pixel(i).with_harbour_region(true);
@@ -425,6 +471,8 @@ mod tests {
             format!("{:?}", Pixel::passage_pixel(2).with_harbour_region(true)),
             "passage#2+harbour"
         );
+        let p = Pixel::passage_pixel(15).with_ship_route(true);
+        assert_eq!((p.passage(), p.on_ship_route()), (Some(15), true));
     }
 
     #[test]

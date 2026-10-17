@@ -17,7 +17,15 @@
 //!     `ocean_min_cell_m` from land is open water and not graded.
 //!
 //!   Saturated widths and distances (beyond the raster's halo) don't limit
-//!   the size; the tile itself (~L8, `max_cell_km`) is the largest leaf.
+//!   the size; the tile itself (~L8, `max_cell_km`) is the largest leaf;
+//! - it is navigable, partly on a ship route (see [`crate::raster`]), lies
+//!   where the shore penalty applies (closer to land than
+//!   `shore_preferred_distance_m`) and is larger than half the narrowest
+//!   ship-route corridor, so the reduced penalty follows the corridor.
+//!
+//! A navigable leaf records its shore distance and channel width (lower
+//! bounds over its pixels) and whether most of its pixels lie on a ship
+//! route; the edge weights are computed from these ([`super::Penalty`]).
 //!
 //! A leaf is navigable only if all its pixels are (and the raster stage
 //! makes a navigable pixel entirely water), so leaves never contain land.
@@ -48,6 +56,11 @@ pub struct LeafParams {
     /// Shore distance recorded for uniform navigable tiles (the halo, where
     /// distances saturate).
     pub uniform_shore_m: f64,
+    /// Blocks partly on a ship route are split down to this size (metres)
+    /// where the shore penalty applies; 0 never splits for ship routes.
+    pub route_cell_m: f64,
+    /// Water closer to land than this has a shore penalty.
+    pub penalty_band_m: f64,
 }
 
 impl LeafParams {
@@ -59,6 +72,15 @@ impl LeafParams {
             cells_across_channel: f64::from(config.grid.cells_across_channel.max(1)),
             ocean_min_cell_m: config.grid.ocean_min_cell_m,
             uniform_shore_m: raster.halo_m,
+            route_cell_m: [
+                config.routing.ship_fairway_width_m,
+                config.routing.separation_lane_width_m,
+            ]
+            .into_iter()
+            .filter(|&w| w > 0.0)
+            .fold(0.0, |a: f64, w| if a == 0.0 { w } else { a.min(w) })
+                / 2.0,
+            penalty_band_m: config.routing.shore_preferred_distance_m,
         }
     }
 }
@@ -75,6 +97,12 @@ pub struct WaterLeaf {
     /// Distance from any point of the cell to the nearest non-navigable
     /// pixel in metres (a lower bound), saturating.
     pub shore_m: u16,
+    /// Local channel width in metres: the smallest pixel width (a lower
+    /// bound within a factor of 2, see [`crate::raster::TileRaster`]),
+    /// saturating; `u16::MAX` for uniform tiles.
+    pub width_m: u16,
+    /// Whether at least half the cell lies on a ship route.
+    pub ship_route: bool,
 }
 
 /// The leaves of one tile, both in cell order.
@@ -97,7 +125,9 @@ impl TileLeaves {
                         cell: *tile,
                         class,
                         passage,
-                        shore_m: shore_u16(params.uniform_shore_m),
+                        shore_m: metres_u16(params.uniform_shore_m),
+                        width_m: u16::MAX,
+                        ship_route: false,
                     });
                 } else {
                     out.land.push(*tile);
@@ -140,7 +170,7 @@ fn needs_fine(p: Pixel) -> bool {
     clippy::cast_sign_loss,
     reason = "clamped to the u16 range first"
 )]
-fn shore_u16(m: f64) -> u16 {
+fn metres_u16(m: f64) -> u16 {
     m.floor().clamp(0.0, f64::from(u16::MAX)) as u16
 }
 
@@ -157,6 +187,8 @@ enum Block {
         min_shore: f32,
         min_width: f32,
         fine: bool,
+        /// Pixels on a ship route.
+        route: u32,
     },
 }
 
@@ -171,6 +203,7 @@ impl Splitter<'_> {
         let mut first: Option<(WaterClass, u8)> = None;
         let mut any_land = false;
         let (mut min_shore, mut min_width, mut fine) = (f32::INFINITY, f32::INFINITY, false);
+        let mut route = 0u32;
         for y in y0..y0 + n {
             let row = r.index(x0, y);
             for i in row..row + n as usize {
@@ -190,6 +223,7 @@ impl Splitter<'_> {
                         min_shore = min_shore.min(r.shore_m[i]);
                         min_width = min_width.min(r.width_m[i]);
                         fine |= needs_fine(p);
+                        route += u32::from(p.on_ship_route());
                     }
                 }
             }
@@ -202,6 +236,7 @@ impl Splitter<'_> {
                 min_shore,
                 min_width,
                 fine,
+                route,
             },
         }
     }
@@ -243,6 +278,7 @@ impl Splitter<'_> {
                 min_shore,
                 min_width,
                 fine,
+                route,
             } => {
                 let min_level = if fine {
                     self.params.harbour_level
@@ -250,9 +286,14 @@ impl Splitter<'_> {
                     self.params.coast_level
                 };
                 let size_m = f64::from(r.pixel_size_m) * f64::from(n);
+                let pixels = n * n;
+                let route_edge = route > 0
+                    && route < pixels
+                    && size_m > self.params.route_cell_m
+                    && f64::from(min_shore) < self.params.penalty_band_m;
                 let split = n > 1
                     && level < min_level.min(r.level)
-                    && size_m > self.allowed_m(min_shore, min_width);
+                    && (size_m > self.allowed_m(min_shore, min_width) || route_edge);
                 (!split).then(|| {
                     // A lower bound over the whole cell: from any point of a
                     // pixel to any point of the nearest blocked pixel.
@@ -261,7 +302,9 @@ impl Splitter<'_> {
                         cell: cell(),
                         class,
                         passage,
-                        shore_m: shore_u16(shore),
+                        shore_m: metres_u16(shore),
+                        width_m: metres_u16(f64::from(min_width)),
+                        ship_route: 2 * route >= pixels,
                     }
                 })
             }
@@ -303,6 +346,8 @@ mod tests {
             cells_across_channel: 4.0,
             ocean_min_cell_m: 2400.0,
             uniform_shore_m: 4000.0,
+            route_cell_m: 150.0,
+            penalty_band_m: 3704.0,
         }
     }
 
@@ -320,6 +365,7 @@ mod tests {
             half_diagonal_m: tile.max_diagonal_m() as f32 / size as f32 / 2.0,
             saturation_m: 4000.0,
             width_saturation_m: 2400.0,
+            width_max_m: 9600.0,
         };
         for y in 0..size {
             for x in 0..size {

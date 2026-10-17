@@ -16,6 +16,49 @@ const INLAND_WATER_VALUES: [&str; 6] = ["river", "canal", "lagoon", "basin", "lo
 /// no depth data they are left navigable.
 const DRYING_NATURAL_VALUES: [&str; 3] = ["shoal", "sand", "mud"];
 
+/// Stated depths below this (metres) mark a channel for small craft, not a
+/// ship route.
+pub const SHIP_ROUTE_MIN_DEPTH_M: f64 = 5.0;
+
+/// `CEMT` inland waterway classes for small vessels (up to ~1,000 t); class
+/// IV and above carry ships.
+const SMALL_CEMT_CLASSES: [&str; 4] = ["0", "I", "II", "III"];
+
+/// A depth tag in metres: `12`, `12.5 m`, `53 ft`, `53'`.
+fn parse_depth_m(value: &str) -> Option<f64> {
+    let v = value.trim();
+    let (number, factor) = if let Some(n) = v.strip_suffix("ft").or_else(|| v.strip_suffix('\'')) {
+        (n, 0.3048)
+    } else {
+        (v.strip_suffix('m').unwrap_or(v), 1.0)
+    };
+    let d: f64 = number.trim().replace(',', ".").parse().ok()?;
+    (d.is_finite() && d >= 0.0).then_some(d * factor)
+}
+
+/// Whether a fairway or recommended track is meant for ships: not closed
+/// to them (`ship=no`, `access=no`), and unless tagged `ship=yes`, not a
+/// canoe or kayak route, not a small inland waterway (`CEMT` 0 to III) and
+/// not stated to be shallower than [`SHIP_ROUTE_MIN_DEPTH_M`].
+fn is_ship_route(tags: &JsonObject) -> bool {
+    let tag = |key: &str| tags.get(key).and_then(serde_json::Value::as_str);
+    if tag("ship") == Some("no") || tag("access") == Some("no") {
+        return false;
+    }
+    if tag("ship") == Some("yes") {
+        return true;
+    }
+    let small_craft = |key: &str| matches!(tag(key), Some("yes" | "designated"));
+    let shallow = ["depth", "seamark:recommended_track:minimum_depth"]
+        .iter()
+        .filter_map(|&k| tag(k).and_then(parse_depth_m))
+        .any(|d| d < SHIP_ROUTE_MIN_DEPTH_M);
+    !(small_craft("canoe")
+        || small_craft("sea_kayak")
+        || tag("CEMT").is_some_and(|c| SMALL_CEMT_CLASSES.contains(&c))
+        || shallow)
+}
+
 /// Classifies a feature by its OSM tags (spec §4). Returns the empty set for
 /// features that contribute nothing, such as untagged multipolygon members
 /// that the osmium filter pulls in.
@@ -55,6 +98,16 @@ pub fn classify_tags(tags: &JsonObject) -> ClassSet {
     }
     if tag("waterway") == Some("fairway") {
         classes.insert(SourceClass::Fairway);
+    }
+    match tag("seamark:type") {
+        Some("separation_lane") => classes.insert(SourceClass::SeparationLane),
+        Some("recommended_track") if is_ship_route(tags) => {
+            classes.insert(SourceClass::ShipFairway);
+        }
+        _ if tag("waterway") == Some("fairway") && is_ship_route(tags) => {
+            classes.insert(SourceClass::ShipFairway);
+        }
+        _ => {}
     }
     classes
 }
