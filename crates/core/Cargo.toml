@@ -33,3 +33,7 @@ workspace = true
 [[bench]]
 name = "route"
 harness = false
+
+[[bench]]
+name = "phase1"
+harness = false
