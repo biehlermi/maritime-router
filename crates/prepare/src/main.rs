@@ -295,7 +295,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 fn raster_cmd(args: &RasterArgs) -> Result<()> {
     let mut config = Config::load(&args.config)?;
     if let Some(b) = bbox_arg(args.bbox.as_ref())? {
-        config.region.bbox = Some(b);
+        config.region.set_bbox(b);
         config.check()?;
     }
     let params = RasterParams::from_config(&config);
@@ -308,7 +308,7 @@ fn raster_cmd(args: &RasterArgs) -> Result<()> {
         "sources: {polygons} polygons, {points} points, {lines} corridor lines ({:.1} s)",
         start.elapsed().as_secs_f64()
     );
-    let tiles = raster::tiles_for_region(params.tile_level, config.region.bbox);
+    let tiles = raster::tiles_for_regions(params.tile_level, config.region.boxes().as_deref());
     println!(
         "{} tiles at level {} (raster levels {} / {})",
         tiles.len(),

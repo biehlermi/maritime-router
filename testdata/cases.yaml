@@ -1,3 +1,259 @@
-# Acceptance cases. Filled in Phase 1 with verified cruise terminal coordinates
-# and reference distances (NGA Pub. 151), recording what each reference measures.
-cases: []
+# Acceptance cases (spec §9), Phase 1: cases 1-7, 15 and 22, plus one
+# supporting case (03s) that gives case 3's coastal leg a published reference.
+# Schema: crates/acceptance/src/cases.rs. Run with
+#
+#   maritime-router-cli test --data phase1.mrd testdata/cases.yaml --out results/
+#
+# Waypoints are cruise terminals, taken from OpenStreetMap features (Geofabrik
+# extracts of 2026-10-15, looked up with the Overpass API on 2026-10-16) and
+# cross-checked with the Portolo port catalogue (read only). Each `source`
+# names the OSM object and the distance to Portolo's position for the port.
+# Portolo positions are port positions, not always the terminal: where they
+# differ by more than a few hundred metres, the OSM terminal was used.
+#
+# Reference distances come from NGA Pub. 151, Distances Between Ports, 11th
+# edition (2001), public domain. Pub. 151 measures between one "central
+# position" per port, "generally over routes that afford the safest passage"
+# (its preface), so a terminal-to-terminal route differs from it by the
+# harbour approach at both ends, and its ocean distances follow recommended
+# tracks rather than the shortest water path. Distances combined from two
+# Pub. 151 tables (port to a junction point, junction point to port) are
+# marked as such. Pub. 151 has no entry for Geiranger or Flåm and no
+# comparable official table was found, so cases 3 and 4 have no distance
+# expectation; case 03s checks most of case 3's coastal leg instead.
+
+defaults:
+  distance_tolerance: 0.10
+
+cases:
+  - id: 01-hamburg-southampton
+    spec_case: 1
+    title: Hamburg (Steinwerder) → Southampton
+    description: Follows the Elbe to Cuxhaven, then the North Sea and the Strait of Dover.
+    waypoints:
+      - name: Hamburg Cruise Center Steinwerder
+        lat: 53.529508
+        lon: 9.961261
+        source: OSM way 323480582 "Cruise Center Steinwerder" (terminal building); Portolo "Hamburg" 94 m away
+      - name: Southampton Ocean Cruise Terminal (berth 46)
+        lat: 50.892674
+        lon: -1.400318
+        source: OSM way 314606884 "Ocean Cruise Terminal" (berth 46 is OSM node 729188561); Portolo "Southampton" is a city position 1.9 km north
+    expect:
+      passes_near:
+        - { name: Elbe off Cuxhaven, lat: 53.885, lon: 8.72, radius_m: 2500 }
+        - { name: Strait of Dover, lat: 51.03, lon: 1.45, radius_m: 15000 }
+      not_passages: [kiel]
+      distance_nm:
+        value: 522
+        reference: NGA Pub. 151 (2001), Hamburg table, Southampton
+        measures: Hamburg port position 53°32.5'N (central harbour, ~1 nm east of Steinwerder) down the Elbe, across the North Sea and through the Dover Strait to the Southampton port position 50°53'N 1°23.5'W (the docks)
+
+  - id: 02a-hamburg-copenhagen-kiel
+    spec_case: 2
+    title: Hamburg → Copenhagen (default, Kiel Canal)
+    description: With default passages the route uses the Kiel Canal.
+    waypoints:
+      - name: Hamburg Cruise Center Steinwerder
+        lat: 53.529508
+        lon: 9.961261
+        source: OSM way 323480582; Portolo "Hamburg" 94 m away
+      - name: Copenhagen Langelinie cruise quay
+        lat: 55.69868
+        lon: 12.60052
+        source: OSM node 4226406295 "Langeline Cruiseship Terminal" on Langeliniekaj; Portolo "Kopenhagen" 421 m away (Langelinie park)
+    expect:
+      uses_passages: [kiel]
+      passes_near:
+        - { name: Brunsbüttel locks, lat: 53.89, lon: 9.14, radius_m: 1500 }
+        - { name: Kiel Fjord off Holtenau, lat: 54.37, lon: 10.16, radius_m: 1500 }
+      distance_nm:
+        value: 253
+        reference: NGA Pub. 151 (2001), Hamburg table (Nord-Ostsee-Kanal East Entrance, 91) plus Nord-Ostsee-Kanal table (Kobenhavn via The Sound, 162)
+        measures: Hamburg port position through the Kiel Canal to its east entrance (54°22'N 10°09'E, Kiel-Holtenau), then through the Fehmarn Belt and Drogden to the Copenhagen port position 55°42'N 12°36.1'E (next to Langelinie)
+
+  - id: 02b-hamburg-copenhagen-skagen
+    spec_case: 2
+    title: Hamburg → Copenhagen (avoid kiel, round Skagen)
+    description: Without the Kiel Canal the route goes round Skagen.
+    waypoints:
+      - name: Hamburg Cruise Center Steinwerder
+        lat: 53.529508
+        lon: 9.961261
+        source: OSM way 323480582; Portolo "Hamburg" 94 m away
+      - name: Copenhagen Langelinie cruise quay
+        lat: 55.69868
+        lon: 12.60052
+        source: OSM node 4226406295; Portolo "Kopenhagen" 421 m away
+    options:
+      avoid: [kiel]
+    expect:
+      not_passages: [kiel]
+      passes_near:
+        - { name: off Skagen (Pub. 151 junction point Skagens Odde), lat: 57.80, lon: 10.70, radius_m: 15000 }
+      distance_nm:
+        value: 510
+        reference: NGA Pub. 151 (2001), Hamburg table (Skagens Odde, 360) plus Skagens Odde table (Kobenhavn, 150)
+        measures: Hamburg port position down the Elbe and north along Jutland to the junction point off Skagen (57°48'N 10°44'E), then through the Kattegat and the Sound to the Copenhagen port position
+
+  - id: 03-bergen-geiranger
+    spec_case: 3
+    title: Bergen → Geiranger
+    description: Inner leads, Storfjord, into the Geirangerfjord to the quay.
+    waypoints:
+      - name: Bergen Skoltegrunnskaien cruise quay
+        lat: 60.401364
+        lon: 5.311352
+        source: OSM relation 5899038 "Skoltegrunnskaien" (man_made=quay); Portolo "Bergen" 117 m away
+      - name: Geiranger cruise terminal
+        lat: 62.102565
+        lon: 7.204534
+        source: OSM node 13812181933 "Stranda Hamnevesen Cruiseterminal"; Portolo "Geiranger" 121 m away
+    expect:
+      passes_near:
+        # The inner lead north of Bergen: Hjeltefjorden to Fedjeosen.
+        - { name: Hjeltefjorden, lat: 60.60, lon: 4.95, radius_m: 2000 }
+        - { name: Fedjeosen, lat: 60.775, lon: 4.70, radius_m: 2500 }
+        - { name: Storfjorden off Stranda, lat: 62.31, lon: 6.95, radius_m: 2000 }
+        - { name: Geirangerfjorden (Seven Sisters), lat: 62.103, lon: 7.09, radius_m: 600 }
+
+  - id: 03s-bergen-alesund
+    title: Bergen → Ålesund (supporting reference for case 3)
+    description: Most of case 3's coastal leg, to a port that Pub. 151 lists.
+    waypoints:
+      - name: Bergen Skoltegrunnskaien cruise quay
+        lat: 60.401364
+        lon: 5.311352
+        source: OSM relation 5899038; Portolo "Bergen" 117 m away
+      - name: Ålesund cruise quay
+        lat: 62.4722
+        lon: 6.1549
+        source: Portolo "Ålesund" (the Prestebrygga/Stornespiren cruise quays); the Overpass API was overloaded, so this one is not cross-checked with OSM
+    expect:
+      distance_nm:
+        value: 167
+        reference: NGA Pub. 151 (2001), Bergen table, Alesund
+        measures: Bergen port position 60°24'N 5°19'E (Vågen, next to Skoltegrunnskaien) to the Ålesund port position 62°28.1'N 6°09.5'E; the route is not stated (inner leads or outside)
+
+  - id: 04-geiranger-flam
+    spec_case: 4
+    title: Geiranger → Flåm
+    description: Out of the fjord, along the coast, into the Sognefjord and Aurlandsfjord; never over land.
+    waypoints:
+      - name: Geiranger cruise terminal
+        lat: 62.102565
+        lon: 7.204534
+        source: OSM node 13812181933; Portolo "Geiranger" 121 m away
+      - name: Flåm cruise quay
+        lat: 60.8628
+        lon: 7.1138
+        source: Portolo "Flåm" (the quay at the head of the Aurlandsfjord); the Overpass API was overloaded, so this one is not cross-checked with OSM
+    expect:
+      passes_near:
+        - { name: Geirangerfjorden (Seven Sisters), lat: 62.103, lon: 7.09, radius_m: 600 }
+        # The fjord is about 4 km wide here; any course through it passes.
+        - { name: Sognefjorden off Balestrand, lat: 61.16, lon: 6.55, radius_m: 2500 }
+        - { name: Aurlandsfjorden, lat: 60.95, lon: 7.13, radius_m: 1500 }
+
+  - id: 05-southampton-new-york
+    spec_case: 5
+    title: Southampton → New York (Manhattan Cruise Terminal)
+    description: Verrazzano Narrows, Upper Bay, up the Hudson to the pier.
+    waypoints:
+      - name: Southampton Ocean Cruise Terminal (berth 46)
+        lat: 50.892674
+        lon: -1.400318
+        source: OSM way 314606884; Portolo "Southampton" 1.9 km north
+      - name: Manhattan Cruise Terminal, Pier 88
+        lat: 40.766399
+        lon: -73.999776
+        source: OSM way 150810573 "Pier 88" (inside OSM harbour area 495267270 "Manhattan Cruise Terminal"); Portolo "New York (Manhattan)" 452 m away (on 12th Avenue)
+    expect:
+      passes_near:
+        - { name: Ambrose Channel, lat: 40.47, lon: -73.88, radius_m: 3000 }
+        - { name: Verrazzano Narrows, lat: 40.607, lon: -74.046, radius_m: 800 }
+        - { name: Hudson River off Pier 40, lat: 40.73, lon: -74.017, radius_m: 500 }
+      distance_nm:
+        value: 3169
+        reference: NGA Pub. 151 (2001), Southampton table (Bishop Rock via Needles Channel, 232) plus New York table (Bishop Rock, 2937)
+        measures: Southampton port position through the Needles Channel and the Channel to the junction point Bishop Rock (49°45'N 6°35'W), then over the recommended track to the New York port position 40°42'N 74°01'W (the Battery, ~3.5 nm south of Pier 88)
+
+  - id: 06-brooklyn-cape-liberty
+    spec_case: 6
+    title: New York (Brooklyn) → Cape Liberty (Bayonne)
+    description: Short leg inside the harbour that stays in channels.
+    waypoints:
+      - name: Brooklyn Cruise Terminal (Red Hook, Pier 12)
+        lat: 40.682649
+        lon: -74.013488
+        source: OSM way 986763104 "Brooklyn Cruise Terminal"; not in Portolo
+      - name: Port Liberty (Cape Liberty) Cruise Terminal, Bayonne
+        lat: 40.66498
+        lon: -74.0726
+        source: OSM way 951443146 "Port Liberty Cruise Terminal"; Portolo "New York (Bayonne)" 148 m away
+    expect:
+      passes_near:
+        - { name: Upper New York Bay, lat: 40.67, lon: -74.04, radius_m: 1500 }
+
+  - id: 07-amsterdam-hamburg
+    spec_case: 7
+    title: Amsterdam (PTA) → Hamburg
+    description: North Sea Canal and IJmuiden locks.
+    waypoints:
+      - name: Passenger Terminal Amsterdam
+        lat: 52.378075
+        lon: 4.917098
+        source: OSM way 194902943 "Passenger Terminal Amsterdam" (pier); Portolo "Amsterdam" 63 m away
+      - name: Hamburg Cruise Center Steinwerder
+        lat: 53.529508
+        lon: 9.961261
+        source: OSM way 323480582; Portolo "Hamburg" 94 m away
+    expect:
+      uses_passages: [ijmuiden]
+      passes_near:
+        - { name: IJmuiden locks, lat: 52.464, lon: 4.605, radius_m: 1000 }
+        - { name: Elbe off Cuxhaven, lat: 53.885, lon: 8.72, radius_m: 2500 }
+      distance_nm:
+        value: 274
+        reference: NGA Pub. 151 (2001), Hamburg table, Amsterdam
+        measures: Amsterdam port position 52°23'N 4°54'E (the IJ, next to the Passenger Terminal) through the North Sea Canal and IJmuiden, along the coast and up the Elbe to the Hamburg port position
+
+  - id: 15-stockholm-helsinki
+    spec_case: 15
+    title: Stockholm → Helsinki
+    description: Through the Stockholm archipelago and the Åland Sea.
+    waypoints:
+      - name: Stockholm Cruise Center Frihamnen (Magasin 9)
+        lat: 59.345507
+        lon: 18.130274
+        source: OSM way 23918218 "Stockholm Cruise Center - Magasin 9"; Portolo "Stockholm" 359 m away (Frihamnen)
+      - name: Helsinki Olympia Terminal (South Harbour)
+        lat: 60.16077
+        lon: 24.958816
+        source: OSM way 327321393 "Olympiaterminaali"; Portolo "Helsinki" 5 m away
+    expect:
+      passes_near:
+        - { name: Åland Sea, lat: 60.0, lon: 19.4, radius_m: 25000 }
+      distance_nm:
+        value: 239
+        reference: NGA Pub. 151 (2001), Stockholm table, Helsinki
+        measures: Stockholm port position 59°19.5'N 18°05'E (Stadsgården, ~3 nm by water before Frihamnen) to the Helsinki port position (South Harbour); the route through the archipelago is not stated
+
+  - id: 22-same-point
+    spec_case: 22
+    title: Same point twice
+    description: Distance 0, valid response.
+    waypoints:
+      - name: Hamburg Cruise Center Steinwerder
+        lat: 53.529508
+        lon: 9.961261
+        source: OSM way 323480582
+      - name: Hamburg Cruise Center Steinwerder
+        lat: 53.529508
+        lon: 9.961261
+        source: OSM way 323480582
+    expect:
+      distance_nm:
+        value: 0
+        reference: identical waypoints
+        measures: nothing (a route from a point to itself)

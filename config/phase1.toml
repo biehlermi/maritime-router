@@ -1,0 +1,42 @@
+# Phase-1 regional build (plan PR 8): the North Sea and the Baltic with Norway,
+# Germany, Denmark, the Netherlands and Sweden/Finland, the English Channel, and
+# a North Atlantic corridor to the New York harbour area.
+#
+#   maritime-router-prepare build --config config/phase1.toml --out phase1.mrd
+#
+# Sources (see testdata/README or the PR 8 description): the osmdata water
+# polygons and the Geofabrik extracts listed below, each filtered with
+# scripts/osm-filter.sh and concatenated into sources/osm-filtered.geojsonseq:
+#   europe/{norway,sweden,finland,denmark,netherlands,belgium,estonia,latvia,
+#   lithuania,poland,ireland-and-northern-ireland}, europe/germany/{hamburg,
+#   bremen,niedersachsen,schleswig-holstein,mecklenburg-vorpommern},
+#   europe/united-kingdom/{england,scotland}, europe/france/{nord-pas-de-calais,
+#   picardie,haute-normandie,basse-normandie,bretagne}, russia/{kaliningrad,
+#   northwestern-fed-district}, north-america/us/{new-york,new-jersey}.
+# Coasts outside these extracts (Iceland is outside the region; Canada, New
+# England) get coast-level detail from the water polygons only.
+# All other parameters are the defaults of config/prepare.toml.
+
+[region]
+bboxes = [
+  [-6.5, 48.5, 31.5, 71.5],   # North Sea, Baltic, Norway, Channel
+  [-75.0, 38.5, -6.5, 56.0],  # North Atlantic corridor to New York
+]
+
+[harbour]
+# Harbour detail around the acceptance-case terminals (testdata/cases.yaml),
+# in addition to the OSM harbour features.
+extra_points = [
+  [9.961261, 53.529508],    # Hamburg Cruise Center Steinwerder
+  [-1.400318, 50.892674],   # Southampton Ocean Cruise Terminal
+  [12.60052, 55.69868],     # Copenhagen Langelinie
+  [5.311352, 60.401364],    # Bergen Skoltegrunnskaien
+  [7.204534, 62.102565],    # Geiranger cruise terminal
+  [7.1138, 60.8628],        # Flåm
+  [-73.999776, 40.766399],  # New York Manhattan Cruise Terminal (Pier 88)
+  [-74.013488, 40.682649],  # Brooklyn Cruise Terminal
+  [-74.0726, 40.66498],     # Bayonne Port Liberty (Cape Liberty)
+  [4.917098, 52.378075],    # Passenger Terminal Amsterdam
+  [18.130274, 59.345507],   # Stockholm Frihamnen (Magasin 9)
+  [24.9588, 60.1608],       # Helsinki South Harbour
+]

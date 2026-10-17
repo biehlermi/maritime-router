@@ -245,6 +245,30 @@ impl World {
         worst
     }
 
+    /// Strict land oracle: the first point, sampling the great-circle line
+    /// through `points` every `step_m` metres (and at every vertex), that is
+    /// not in a water cell of the map.
+    pub fn first_land_sample(&self, points: &[LatLon], step_m: f64) -> Option<LatLon> {
+        let step = step_m / EARTH_MEAN_RADIUS_M;
+        for w in points.windows(2) {
+            let (a, b) = (Point3::from_latlon(w[0]), Point3::from_latlon(w[1]));
+            let angle = a.angle(b);
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "short test lines"
+            )]
+            let n = (angle / step).ceil().max(1.0) as u32;
+            for k in 0..=n {
+                let x = move_towards(a, b, angle * f64::from(k) / f64::from(n));
+                if !self.locate(x).is_some_and(|(r, c)| self.is_water(r, c)) {
+                    return Some(x.to_latlon());
+                }
+            }
+        }
+        None
+    }
+
     fn intrusion_at(&self, x: Point3) -> f64 {
         match self.locate(x) {
             Some((r, c)) if self.is_water(r, c) => 0.0,

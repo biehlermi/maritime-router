@@ -8,7 +8,10 @@
 //! 2. snaps every waypoint ([`snap`]), failing with `no_water_nearby` and
 //!    the waypoint index if nothing is within the snap distance (at most
 //!    [`RouterConfig::max_snap_distance_cap_m`], 20 km);
-//! 3. per leg, rejects unconnected waters in O(1) by component ID, then runs
+//! 3. per leg, if the ends snapped into different components (say one end
+//!    into a small basin cut off by the conservative raster), moves them
+//!    into the largest component that both reach within the snap distance
+//!    ([`snap_where`]); with none, the leg is `no_route`. Then it runs
 //!    the [`PathSearch`] (A* by default) and smooths the cell path
 //!    ([`SmoothingConfig`]). Each leg is computed in a canonical orientation
 //!    (from the lower node ID) and reversed when needed, so A→B and B→A are
@@ -28,7 +31,7 @@ mod snap;
 pub use filter::{FilterError, PassageFilter};
 pub use search::{AStar, Cancelled, PathResult, PathSearch, SearchQuery};
 pub use smooth::SmoothingConfig;
-pub use snap::{SNAP_INSET_M, SnapOptions, Snapped, snap};
+pub use snap::{SNAP_INSET_M, SnapOptions, Snapped, components_near, snap, snap_where};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -379,21 +382,72 @@ struct LegContext<'a, 'g> {
     search: &'a dyn PathSearch,
     config: &'a RouterConfig,
     filter: PassageFilter,
+    snap_options: SnapOptions,
     cancel: Option<&'a AtomicBool>,
     simplify_m: f64,
 }
 
+/// The line of a leg, the passages it uses and where its ends were snapped.
+struct LegLine {
+    line: Vec<LatLon>,
+    passages: Vec<String>,
+    start: Snapped,
+    end: Snapped,
+}
+
 impl LegContext<'_, '_> {
+    /// Snaps of `a` and `b` in one component: `sa` and `sb` if they share
+    /// one, otherwise new snaps into the largest component (most nodes,
+    /// then lowest ID) that has allowed water within the snap distance of
+    /// both points. Symmetric in the two ends.
+    fn same_component(
+        &self,
+        (a, sa): (LatLon, &Snapped),
+        (b, sb): (LatLon, &Snapped),
+    ) -> Option<(Snapped, Snapped)> {
+        let graph = self.graph;
+        let (ca, cb) = (graph.component(sa.node), graph.component(sb.node));
+        if ca == cb {
+            return Some((*sa, *sb));
+        }
+        let max = self.snap_options.max_distance_m;
+        let near_a = components_near(graph, a, &self.filter, max);
+        let near_b = components_near(graph, b, &self.filter, max);
+        let mut common: Vec<(u64, u32)> = near_a
+            .iter()
+            .filter(|c| near_b.binary_search(c).is_ok())
+            .map(|&c| (graph.component_size(c), c))
+            .collect();
+        common.sort_unstable_by(|x, y| y.0.cmp(&x.0).then(x.1.cmp(&y.1)));
+        common.into_iter().find_map(|(_, c)| {
+            let resnap = |p: LatLon, s: &Snapped| {
+                if graph.component(s.node) == c {
+                    Some(*s)
+                } else {
+                    snap_where(graph, p, &self.filter, self.snap_options, |n| {
+                        graph.component(n) == c
+                    })
+                }
+            };
+            Some((resnap(a, sa)?, resnap(b, sb)?))
+        })
+    }
+
     /// The unrounded line of leg `leg` from waypoint `a` (snapped to `sa`)
-    /// to `b` (snapped to `sb`), and the passages it uses.
+    /// to `b` (snapped to `sb`), the passages it uses and the snaps used.
     fn line(
         &self,
         leg: usize,
         (a, sa): (LatLon, &Snapped),
         (b, sb): (LatLon, &Snapped),
-    ) -> Result<(Vec<LatLon>, Vec<String>), RouteError> {
+    ) -> Result<LegLine, RouteError> {
         if a == b {
-            return Ok((vec![a, a], Vec::new()));
+            return Ok(LegLine {
+                line: vec![a, a],
+                passages: Vec::new(),
+                start: *sa,
+                end: *sb,
+            });
         }
         let no_route = RouteError::NoRoute {
             leg,
@@ -401,9 +455,10 @@ impl LegContext<'_, '_> {
             to: leg + 1,
         };
         let graph = self.graph;
-        if graph.component(sa.node) != graph.component(sb.node) {
-            return Err(no_route);
-        }
+        let (sa, sb) = self
+            .same_component((a, sa), (b, sb))
+            .ok_or(no_route.clone())?;
+        let (sa, sb) = (&sa, &sb);
         // Legs are computed in a canonical orientation and reversed if
         // needed, so A→B and B→A give mirror-image lines.
         let reversed = canonical_order(sb, sa);
@@ -436,7 +491,12 @@ impl LegContext<'_, '_> {
         line.push(a);
         line.extend(core);
         line.push(b);
-        Ok((line, passages_used(graph, &path.nodes)))
+        Ok(LegLine {
+            line,
+            passages: passages_used(graph, &path.nodes),
+            start: *sa,
+            end: *sb,
+        })
     }
 }
 
@@ -462,14 +522,7 @@ pub fn route_on(
             max_distance_m: max_snap,
         })?;
         if s.distance_m > config.snap_warning_m {
-            warnings.push(Warning {
-                code: WarningCode::SnapDistance,
-                waypoint: Some(i),
-                message: format!(
-                    "waypoint {i} was moved {:.0} m to the nearest navigable water",
-                    s.distance_m
-                ),
-            });
+            warnings.push(snap_warning(i, s.distance_m));
         }
         snaps.push(s);
     }
@@ -483,6 +536,7 @@ pub fn route_on(
         search,
         config,
         filter,
+        snap_options: options,
         cancel,
         simplify_m: request.simplify_m,
     };
@@ -492,7 +546,18 @@ pub fn route_on(
             return Err(RouteError::Cancelled);
         }
         let (sa, sb) = (&snaps[leg], &snaps[leg + 1]);
-        let (line, passages) = context.line(leg, (waypoints[leg], sa), (waypoints[leg + 1], sb))?;
+        let LegLine {
+            line,
+            passages,
+            start,
+            end,
+        } = context.line(leg, (waypoints[leg], sa), (waypoints[leg + 1], sb))?;
+        for (i, s) in [(leg, &start), (leg + 1, &end)] {
+            let warned = warnings.iter().any(|w| w.waypoint == Some(i));
+            if s.distance_m > config.snap_warning_m && !warned {
+                warnings.push(snap_warning(i, s.distance_m));
+            }
+        }
         let continuous = finish_line(&unwrap(&line));
         let distance = Distance::from_metres(path_length_m(&continuous));
         let geometry = match request.antimeridian {
@@ -507,8 +572,8 @@ pub fn route_on(
             distance,
             passages,
             snap: LegSnap {
-                start: info(sa),
-                end: info(sb),
+                start: info(&start),
+                end: info(&end),
             },
             geometry,
         });
@@ -518,6 +583,16 @@ pub fn route_on(
         legs,
         warnings,
     })
+}
+
+fn snap_warning(waypoint: usize, distance_m: f64) -> Warning {
+    Warning {
+        code: WarningCode::SnapDistance,
+        waypoint: Some(waypoint),
+        message: format!(
+            "waypoint {waypoint} was moved {distance_m:.0} m to the nearest navigable water"
+        ),
+    }
 }
 
 /// Whether `a` comes before `b` in the canonical leg orientation.

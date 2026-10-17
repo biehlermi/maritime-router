@@ -278,29 +278,63 @@ impl SourceIndexBuilder {
 
 impl SourceIndex {
     /// Reads every source named in `config`: the water polygons, the
-    /// filtered OSM file, the passages and the overrides. With a region bbox,
-    /// features are read if they overlap the bbox grown by `margin_m`.
+    /// filtered OSM file, the passages and the overrides. With region boxes,
+    /// features are read if they overlap a box grown by `margin_m`.
     pub fn load(config: &Config, margin_m: f64) -> anyhow::Result<Self> {
         use anyhow::Context;
-        let bbox = config.region.bbox.map(|[w, s, e, n]| {
-            grow(
-                Rect::new(Coord { x: w, y: s }, Coord { x: e, y: n }),
-                margin_m,
-            )
+        // The readers filter by the envelope of all boxes; features are
+        // then kept if they overlap one of the boxes.
+        let boxes: Option<Vec<Rect<f64>>> = config.region.boxes().map(|boxes| {
+            boxes
+                .iter()
+                .map(|&[w, s, e, n]| {
+                    grow(
+                        Rect::new(Coord { x: w, y: s }, Coord { x: e, y: n }),
+                        margin_m,
+                    )
+                })
+                .collect()
         });
+        let envelope = boxes.as_ref().and_then(|b| {
+            b.iter().copied().reduce(|a, r| {
+                Rect::new(
+                    Coord {
+                        x: a.min().x.min(r.min().x),
+                        y: a.min().y.min(r.min().y),
+                    },
+                    Coord {
+                        x: a.max().x.max(r.max().x),
+                        y: a.max().y.max(r.max().y),
+                    },
+                )
+            })
+        });
+        let wanted = |feature: &crate::sources::SourceFeature| {
+            boxes.as_ref().is_none_or(|b| {
+                b.len() == 1
+                    || b.iter()
+                        .any(|r| crate::sources::overlaps(&feature.geometry, Some(r)))
+            })
+        };
         let h = &config.harbour;
         let mut builder =
             SourceIndexBuilder::new(h.harbour_point_buffer_m, h.ferry_terminal_buffer_m);
         let src = &config.sources;
-        let reader = ShapefileReader::open(&src.water_polygons, SourceClass::Sea, bbox)
+        let reader = ShapefileReader::open(&src.water_polygons, SourceClass::Sea, envelope)
             .with_context(|| format!("opening {}", src.water_polygons.display()))?;
         for feature in reader {
-            builder.add_feature(&feature?);
+            let feature = feature?;
+            if wanted(&feature) {
+                builder.add_feature(&feature);
+            }
         }
         let file = File::open(&src.osm_filtered)
             .with_context(|| format!("opening {}", src.osm_filtered.display()))?;
-        for feature in GeoJsonSeqReader::new(BufReader::new(file), bbox) {
-            builder.add_feature(&feature.with_context(|| src.osm_filtered.display().to_string())?);
+        for feature in GeoJsonSeqReader::new(BufReader::new(file), envelope) {
+            let feature = feature.with_context(|| src.osm_filtered.display().to_string())?;
+            if wanted(&feature) {
+                builder.add_feature(&feature);
+            }
         }
         builder.add_passages(&curated::load_passages(Path::new(&src.passages))?);
         builder.add_overrides(&curated::load_overrides(Path::new(&src.overrides))?);

@@ -78,6 +78,8 @@ const PASSAGE: &str = "canal";
 ///   sea channel along y = -1500 that crosses many tile seams;
 /// - a passage corridor (300 m) across the land along y = 2500;
 /// - a pond (inland water) on the land, connected to nothing;
+/// - a 300 m × 300 m sea fragment (0.09 km²) on the land, connected to
+///   nothing, like the pieces the conservative raster cuts off the sea;
 /// - a lake touching the east sea, forced navigable by an override if
 ///   `force_lake`.
 fn scene(force_lake: bool) -> (maritime_router_prepare::raster::SourceIndex, Vec<Passage>) {
@@ -87,6 +89,7 @@ fn scene(force_lake: bool) -> (maritime_router_prepare::raster::SourceIndex, Vec
         f.rect(-9000.0, -5000.0, -3000.0, 5000.0),
         f.rect(3000.0, -5000.0, 9000.0, 5000.0),
         f.rect(-3100.0, -1700.0, 3100.0, -1300.0),
+        f.rect(-2300.0, -900.0, -2000.0, -600.0),
     ] {
         b.add_feature(&feature(SourceClass::Sea, p.into()));
     }
@@ -158,6 +161,11 @@ struct Built {
 }
 
 fn build_scene(force_lake: bool) -> Built {
+    // The default minimum sea component area, 0.1 km².
+    build_scene_with(force_lake, 100_000.0)
+}
+
+fn build_scene_with(force_lake: bool, min_sea_component_m2: f64) -> Built {
     let (index, passages) = scene(force_lake);
     let r = raster_params();
     let sw = FRAME.coord(-8000.0, -4500.0);
@@ -170,6 +178,9 @@ fn build_scene(force_lake: bool) -> Built {
         &index,
         &r,
         &leaf_params(&r),
+        build::GraphParams {
+            min_sea_component_m2,
+        },
         &tiles,
         meta,
         build::passage_infos(&passages),
@@ -193,6 +204,20 @@ fn node_at(g: &Graph<'_>, x: f64, y: f64) -> maritime_router_core::model::NodeId
         PointClass::Water(n) => n,
         other => panic!("({x}, {y}) is {other:?}, not water"),
     }
+}
+
+#[test]
+fn small_sea_fragments_are_kept_without_a_minimum() {
+    let built = build_scene_with(false, 0.0);
+    let g = built.sections.validate().unwrap();
+    let fragment = node_at(&g, -2150.0, -750.0);
+    assert_eq!(g.class(fragment), WaterClass::Sea);
+    assert_ne!(
+        g.component(fragment),
+        g.component(node_at(&g, -6000.0, 0.0))
+    );
+    assert_eq!(built.graph_stats.kept_components, 2);
+    assert_eq!(built.graph_stats.small_sea_components, 0);
 }
 
 #[test]
@@ -231,7 +256,10 @@ fn seams_channels_ponds_and_passages() {
 
     // The pond is dropped and becomes land.
     assert_eq!(class_at(&g, -1000.0, 400.0), PointClass::Land);
-    assert!(built.graph_stats.dropped_components >= 1);
+    assert!(built.graph_stats.dropped_components >= 2);
+    // So is the small sea fragment.
+    assert_eq!(class_at(&g, -2150.0, -750.0), PointClass::Land);
+    assert_eq!(built.graph_stats.small_sea_components, 1);
     // Land far from water is land, not outside the model.
     assert_eq!(class_at(&g, 0.0, 1000.0), PointClass::Land);
 
@@ -387,6 +415,9 @@ fn narrow_diagonal_corridor_connects() {
         &index,
         &r,
         &leaf_params(&r),
+        build::GraphParams {
+            min_sea_component_m2: 0.0,
+        },
         &tiles,
         GraphMeta::new("test"),
         build::passage_infos(&passages),
@@ -399,4 +430,69 @@ fn narrow_diagonal_corridor_connects() {
     let (west, east) = (node_at(&g, -3000.0, 0.0), node_at(&g, 3000.0, 0.0));
     assert_eq!(g.component(west), g.component(east));
     assert_eq!(g.class(node_at(&g, 0.0, -100.0)), WaterClass::Passage);
+}
+
+#[test]
+fn override_fills_a_gap_between_water_polygons() {
+    // Sea in the west, inland water in the east, and between them a basin
+    // that the sources don't count as water (like the IJmuiden outer
+    // harbour, mapped as untagged natural=water). An override with exactly
+    // the basin's shape, sharing its edges with both, joins all three.
+    let f = FRAME;
+    let build = |with_override: bool| {
+        let mut b = SourceIndexBuilder::new(300.0, 300.0);
+        b.add_feature(&feature(
+            SourceClass::Sea,
+            f.rect(-6000.0, -6000.0, -1000.0, 6000.0).into(),
+        ));
+        b.add_feature(&feature(
+            SourceClass::InlandWater,
+            f.rect(1000.0, -600.0, 6000.0, 600.0).into(),
+        ));
+        if with_override {
+            b.add_overrides(&[Override {
+                id: None,
+                effect: OverrideEffect::ForceNavigable,
+                reason: "test".into(),
+                sources: vec![],
+                area: MultiPolygon(vec![f.rect(-1000.0, -600.0, 1000.0, 600.0)]),
+            }]);
+        }
+        let index = b.build();
+        let r = raster_params();
+        let sw = f.coord(-5000.0, -5000.0);
+        let ne = f.coord(5000.0, 5000.0);
+        let tiles = tiles_for_region(r.tile_level, Some([sw.x, sw.y, ne.x, ne.y]));
+        build::build_graph(
+            &index,
+            &r,
+            &leaf_params(&r),
+            build::GraphParams {
+                min_sea_component_m2: 0.0,
+            },
+            &tiles,
+            GraphMeta::new("test"),
+            Vec::new(),
+            false,
+        )
+        .unwrap()
+        .0
+    };
+    let sections = build(true);
+    let g = sections.validate().unwrap();
+    let (sea, gap, inland) = (
+        node_at(&g, -3000.0, 0.0),
+        node_at(&g, 0.0, 0.0),
+        node_at(&g, 3000.0, 0.0),
+    );
+    assert_eq!(g.component(sea), g.component(gap));
+    assert_eq!(g.component(sea), g.component(inland));
+    // Across the shared edges themselves (x = ±1000 m) there is water.
+    for x in [-1000.0, 1000.0] {
+        assert!(matches!(class_at(&g, x, 0.0), PointClass::Water(_)), "{x}");
+    }
+    // Without the override the inland water is cut off and dropped.
+    let without = build(false);
+    let g = without.validate().unwrap();
+    assert_eq!(class_at(&g, 3000.0, 0.0), PointClass::Land);
 }

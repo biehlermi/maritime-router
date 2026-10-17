@@ -15,6 +15,12 @@
 //!    fairway, not into a narrow side basin.
 //! 5. The snapped point is the closest point of the chosen cell, moved 1 m
 //!    towards the cell centre, so it lies strictly inside the cell.
+//!
+//! [`snap_where`] does the same over the leaves that pass a predicate, and
+//! [`components_near`] lists the components with a leaf within the radius.
+//! The router uses them when the two ends of a leg snap into different
+//! components (for example a terminal next to a small cut-off basin): it
+//! moves an end into the largest component both ends can reach.
 
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
@@ -110,9 +116,22 @@ pub fn snap(
     filter: &PassageFilter,
     options: SnapOptions,
 ) -> Option<Snapped> {
+    snap_where(graph, p, filter, options, |_| true)
+}
+
+/// Like [`snap`], considering only the allowed nodes for which `accept`
+/// holds.
+pub fn snap_where(
+    graph: &Graph<'_>,
+    p: LatLon,
+    filter: &PassageFilter,
+    options: SnapOptions,
+    accept: impl Fn(NodeId) -> bool,
+) -> Option<Snapped> {
     let p3 = Point3::from_latlon(p);
+    let allowed = |n: NodeId| filter.allows_node(graph, n) && accept(n);
     if let Some(n) = graph.locate(CellId::from_point(p3))
-        && filter.allows_node(graph, n)
+        && allowed(n)
     {
         return Some(Snapped {
             node: n,
@@ -143,7 +162,7 @@ pub fn snap(
             }
             Item::Region(q) => {
                 if let Some(n) = graph.locate(q) {
-                    if seen.insert(n.0) && filter.allows_node(graph, n) {
+                    if seen.insert(n.0) && allowed(n) {
                         let (x, _) = graph.cell(n).closest_point(p3);
                         let d = distance_m(p, x.to_latlon());
                         if d <= max {
@@ -191,6 +210,59 @@ pub fn snap(
         point3: s,
         distance_m: distance_m(p, point),
     })
+}
+
+/// The components (sorted IDs) with an allowed node within
+/// `max_distance_m` of `p`.
+///
+/// Scans the nodes inside the covering cells of the disk; the exact
+/// distance is only measured for nodes of components not found yet, so the
+/// cost is a pass over the node IDs plus a few distance computations per
+/// component.
+pub fn components_near(
+    graph: &Graph<'_>,
+    p: LatLon,
+    filter: &PassageFilter,
+    max_distance_m: f64,
+) -> Vec<u32> {
+    let p3 = Point3::from_latlon(p);
+    let mut found: Vec<u32> = Vec::new();
+    if max_distance_m.is_nan() || graph.node_count() == 0 {
+        return found;
+    }
+    if let Some(n) = graph.locate(CellId::from_point(p3))
+        && filter.allows_node(graph, n)
+    {
+        found.push(graph.component(n));
+    }
+    let mut heap = BinaryHeap::new();
+    cover(p3, max_distance_m.max(0.0), &mut heap);
+    let check = |n: NodeId, found: &mut Vec<u32>| {
+        let c = graph.component(n);
+        if found.contains(&c) || !filter.allows_node(graph, n) {
+            return;
+        }
+        let cell = graph.cell(n);
+        if lower_bound_m(cell, p3) > max_distance_m {
+            return;
+        }
+        let (x, _) = cell.closest_point(p3);
+        if distance_m(p, x.to_latlon()) <= max_distance_m {
+            found.push(c);
+        }
+    };
+    for Queued { item, .. } in heap.into_sorted_vec().into_iter().rev() {
+        let Item::Region(q) = item else { continue };
+        if let Some(n) = graph.locate(q) {
+            check(n, &mut found);
+        } else {
+            for n in graph.nodes_within(q) {
+                check(n, &mut found);
+            }
+        }
+    }
+    found.sort_unstable();
+    found
 }
 
 /// Pushes the cells of a level about `max_m` in size that come within

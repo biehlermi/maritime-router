@@ -11,10 +11,12 @@
 //!    faces, and lets a diagonal through only when the orthogonal neighbours
 //!    are navigable.
 //! 3. **Connectivity.** Union-find over all edges, with every passage
-//!    allowed. Components with at least one sea leaf are kept: the seas and
-//!    the inland, harbour and passage water connected to them through
-//!    navigable water. The rest (ponds, lakes, rivers cut off by the width
-//!    rules) becomes land.
+//!    allowed. Components with at least one sea leaf and an area of at
+//!    least `min_sea_component_m2` are kept: the seas and the inland,
+//!    harbour and passage water connected to them through navigable water.
+//!    The rest becomes land: ponds, lakes, rivers cut off by the width
+//!    rules, and small sea fragments the conservative raster cut off from
+//!    the sea (a terminal could otherwise snap into one and find no route).
 //! 4. **Weights.** `edge_weight_dm` of the centres with the mean shore
 //!    penalty of both ends.
 //! 5. **Land.** Land leaves and dropped water, with each complete set of
@@ -48,6 +50,10 @@ pub struct GraphStats {
     pub kept_components: u64,
     /// Components dropped.
     pub dropped_components: u64,
+    /// Of those, sea components dropped for being smaller than the minimum
+    /// area.
+    #[serde(default)]
+    pub small_sea_components: u64,
     /// Navigable leaves dropped with them.
     pub dropped_leaves: u64,
     /// Final nodes.
@@ -144,11 +150,13 @@ pub fn merge_siblings(cells: &[CellId]) -> Vec<CellId> {
     out
 }
 
-/// Builds the graph sections from the leaves of all tiles (in any order).
+/// Builds the graph sections from the leaves of all tiles (in any order),
+/// dropping sea components smaller than `min_sea_component_m2`.
 pub fn assemble(
     mut tiles: Vec<(CellId, TileLeaves)>,
     meta: GraphMeta,
     passages: Vec<PassageInfo>,
+    min_sea_component_m2: f64,
 ) -> Result<(GraphSections, GraphStats), ModelError> {
     let mut stats = GraphStats::default();
 
@@ -176,7 +184,7 @@ pub fn assemble(
         new_id,
         comp,
         nodes,
-    } = connectivity(&leaves, &edges, &mut stats);
+    } = connectivity(&leaves, &edges, min_sea_component_m2, &mut stats);
     land.extend(
         leaves
             .iter()
@@ -281,32 +289,41 @@ struct Kept {
     nodes: usize,
 }
 
-/// Components with every passage allowed; those with a sea leaf are kept
-/// and numbered in order of their first leaf.
-fn connectivity(leaves: &[WaterLeaf], edges: &[(u32, u32, u32)], stats: &mut GraphStats) -> Kept {
+/// Components with every passage allowed; those with a sea leaf and at
+/// least `min_area_m2` are kept and numbered in order of their first leaf.
+fn connectivity(
+    leaves: &[WaterLeaf],
+    edges: &[(u32, u32, u32)],
+    min_area_m2: f64,
+    stats: &mut GraphStats,
+) -> Kept {
     let mut uf = UnionFind::new(leaves.len());
     for &(i, j, _) in edges {
         uf.union(i, j);
     }
     let roots: Vec<u32> = (0..leaves.len()).map(|i| uf.find(u32_of(i))).collect();
     drop(uf);
+    let areas: Vec<f64> = leaves.par_iter().map(|l| l.cell.area_m2()).collect();
     let mut has_sea = vec![false; leaves.len()];
-    for (l, &r) in leaves.iter().zip(&roots) {
+    let mut area = vec![0.0f64; leaves.len()];
+    for ((l, &r), a) in leaves.iter().zip(&roots).zip(areas) {
         has_sea[r as usize] |= l.class == WaterClass::Sea;
+        area[r as usize] += a;
     }
     let mut comp_of_root = vec![UNSEEN; leaves.len()];
     let mut new_id = vec![u32::MAX; leaves.len()];
     let mut comp = Vec::new();
-    let (mut next_comp, mut dropped) = (0u32, 0u64);
+    let (mut next_comp, mut dropped, mut small) = (0u32, 0u64, 0u64);
     for (i, &r) in roots.iter().enumerate() {
         let r = r as usize;
         if comp_of_root[r] == UNSEEN {
-            if has_sea[r] {
+            if has_sea[r] && area[r] >= min_area_m2 {
                 comp_of_root[r] = next_comp;
                 next_comp += 1;
             } else {
                 comp_of_root[r] = DROPPED;
                 dropped += 1;
+                small += u64::from(has_sea[r]);
             }
         }
         if comp_of_root[r] != DROPPED {
@@ -316,6 +333,7 @@ fn connectivity(leaves: &[WaterLeaf], edges: &[(u32, u32, u32)], stats: &mut Gra
     }
     stats.kept_components = u64::from(next_comp);
     stats.dropped_components = dropped;
+    stats.small_sea_components = small;
     stats.dropped_leaves = (leaves.len() - comp.len()) as u64;
     Kept {
         new_id,

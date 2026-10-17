@@ -23,9 +23,26 @@ pub struct Config {
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RegionConfig {
-    /// `[min_lon, min_lat, max_lon, max_lat]` in WGS84 degrees; `None` for a
-    /// global build.
+    /// `[min_lon, min_lat, max_lon, max_lat]` in WGS84 degrees; `None` (and
+    /// no `bboxes`) for a global build.
     pub bbox: Option<[f64; 4]>,
+    /// More boxes in the same form: the region is the union of `bbox` and
+    /// these (a multi-region build).
+    pub bboxes: Vec<[f64; 4]>,
+}
+
+impl RegionConfig {
+    /// The boxes of the region, or `None` for a global build.
+    pub fn boxes(&self) -> Option<Vec<[f64; 4]>> {
+        let all: Vec<[f64; 4]> = self.bbox.iter().chain(&self.bboxes).copied().collect();
+        (!all.is_empty()).then_some(all)
+    }
+
+    /// Replaces the region with one box (the `--bbox` option).
+    pub fn set_bbox(&mut self, bbox: [f64; 4]) {
+        self.bbox = Some(bbox);
+        self.bboxes.clear();
+    }
 }
 
 /// `[grid]`.
@@ -64,6 +81,11 @@ pub struct WaterConfig {
     pub inland_min_width_m: f64,
     pub harbour_min_width_m: f64,
     pub include_lakes: bool,
+    /// Sea components (connected water with a sea cell, all passages
+    /// allowed) smaller than this many km² are dropped like ponds. They
+    /// are fragments the conservative raster cut off from the sea; see
+    /// `config/prepare.toml` for the choice of the default.
+    pub min_sea_component_km2: f64,
 }
 
 impl Default for WaterConfig {
@@ -72,6 +94,7 @@ impl Default for WaterConfig {
             inland_min_width_m: 150.0,
             harbour_min_width_m: 30.0,
             include_lakes: false,
+            min_sea_component_km2: 0.1,
         }
     }
 }
@@ -209,6 +232,12 @@ impl Config {
             self.water.harbour_min_width_m,
             &mut problems,
         );
+        let min_comp = self.water.min_sea_component_km2;
+        if !(min_comp.is_finite() && min_comp >= 0.0) {
+            problems.push(format!(
+                "water.min_sea_component_km2 must be a non-negative number, got {min_comp}"
+            ));
+        }
         if g.harbour_min_cell_m > g.coastal_min_cell_m {
             problems.push("grid.harbour_min_cell_m must not exceed grid.coastal_min_cell_m".into());
         }
@@ -247,7 +276,7 @@ impl Config {
                 problems.push(format!("harbour.extra_points: invalid point {p:?}"));
             }
         }
-        if let Some([w, s, e, n]) = self.region.bbox {
+        for [w, s, e, n] in self.region.boxes().unwrap_or_default() {
             let ok = [w, s, e, n].iter().all(|v| v.is_finite())
                 && (-180.0..=180.0).contains(&w)
                 && (-180.0..=180.0).contains(&e)
@@ -257,7 +286,7 @@ impl Config {
                 && s < n;
             if !ok {
                 problems.push(format!(
-                    "region.bbox must be [min_lon, min_lat, max_lon, max_lat] with min < max, got {:?}",
+                    "region boxes must be [min_lon, min_lat, max_lon, max_lat] with min < max, got {:?}",
                     [w, s, e, n]
                 ));
             }
@@ -281,6 +310,7 @@ mod tests {
         assert_eq!(config.grid.tile_halo_m, 4000.0);
         assert_eq!(config.water.inland_min_width_m, 150.0);
         assert_eq!(config.region.bbox, None);
+        assert_eq!(config.water.min_sea_component_km2, 0.1);
     }
 
     #[test]
@@ -290,5 +320,23 @@ mod tests {
         assert!(Config::parse("[region]\nbbox = [10, 50, 9, 51]\n", "t").is_err());
         let ok = Config::parse("[region]\nbbox = [8.5, 53.4, 10.1, 54.0]\n", "t").unwrap();
         assert_eq!(ok.region.bbox, Some([8.5, 53.4, 10.1, 54.0]));
+        assert!(Config::parse("[water]\nmin_sea_component_km2 = -1\n", "t").is_err());
+        assert!(Config::parse("[region]\nbboxes = [[1, 2, 3, 4], [5, 6, 4, 7]]\n", "t").is_err());
+    }
+
+    #[test]
+    fn multi_region() {
+        let mut c = Config::parse(
+            "[region]\nbbox = [0, 50, 10, 60]\nbboxes = [[-40, 40, 0, 52]]\n",
+            "t",
+        )
+        .unwrap();
+        assert_eq!(
+            c.region.boxes(),
+            Some(vec![[0.0, 50.0, 10.0, 60.0], [-40.0, 40.0, 0.0, 52.0]])
+        );
+        c.region.set_bbox([1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(c.region.boxes(), Some(vec![[1.0, 2.0, 3.0, 4.0]]));
+        assert_eq!(Config::default().region.boxes(), None);
     }
 }

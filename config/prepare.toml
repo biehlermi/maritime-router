@@ -6,6 +6,9 @@
 # Bounding box to build: [min_lon, min_lat, max_lon, max_lat] in WGS84 degrees.
 # Omit for a global build.
 # bbox = [-75.0, 35.0, 32.0, 72.0]
+# More boxes for a multi-region build (the region is the union of all boxes;
+# `--bbox` on the command line replaces them all).
+# bboxes = [[-6.5, 48.5, 31.5, 71.5], [-75.0, 38.5, -6.5, 56.0]]
 
 [grid]
 # Cell size limits (metres). Cells are split while they contain both water and
@@ -22,6 +25,17 @@ tile_halo_m = 4000             # context around each ~40 km build tile; shore di
 inland_min_width_m = 150       # inland water narrower than this is removed (morphological opening)
 harbour_min_width_m = 30       # harbour water narrower than this is removed
 include_lakes = false          # lakes only via passage corridors or force_navigable overrides
+# Sea components (water connected to a sea cell, with all passages allowed)
+# smaller than this are dropped like ponds. The conservative raster cuts small
+# pieces off the sea (pockets behind a gap narrower than a cell, sea between
+# piers); a terminal could snap into one and get a false no_route. 0.1 km²
+# (10 ha, e.g. 300 m x 330 m) is far below anything a seagoing ship sails in on
+# its own: the Caspian (371,000 km²) and dock basins behind locks (typically
+# several tens of hectares and more) are kept, while the cut-off fragments, a
+# few to a few hundred 18-35 m cells (0.0003-0.1 km²), are dropped.
+# The router also re-snaps a leg whose ends lie in different components (see
+# core::route), so a kept basin never causes a false no_route either.
+min_sea_component_km2 = 0.1
 
 [harbour]
 ferry_terminal_buffer_m = 500  # buffer around amenity=ferry_terminal that gets harbour detail

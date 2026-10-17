@@ -14,7 +14,8 @@
 //!    in the face plane, so polygon edges (densified from lon/lat lines)
 //!    are rasterised exactly.
 //! 2. **Water.** All navigable water polygons (sea, inland water, lakes if
-//!    enabled) are merged into one union first, in lon/lat. This removes
+//!    enabled, `force_navigable` override areas) are merged into one union
+//!    first, in lon/lat. This removes
 //!    the internal edges where polygons meet: the 100 km split lines of the
 //!    sea polygons, river mouths, adjacent riverbank pieces. Only the edges
 //!    of the union are real shores. They are marked with a supercover
@@ -80,7 +81,7 @@ use maritime_router_core::grid::{CellId, level_avg_size_m};
 
 pub use self::index::{SourceIndex, SourceIndexBuilder};
 pub use self::tile::process_tile;
-pub use self::tiles::{process_tiles, tiles_for_region};
+pub use self::tiles::{process_tiles, tiles_for_region, tiles_for_regions};
 pub use self::window::TileWindow;
 use crate::config::Config;
 

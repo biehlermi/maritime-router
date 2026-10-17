@@ -100,6 +100,47 @@ Add `--tile-images` for full-resolution class, shore-distance and channel-width
 images of every detailed tile. Examples from the Elbe between Cuxhaven and
 Hamburg are in [`docs/images/raster`](docs/images/raster).
 
+The whole build writes the data file; `stats` describes it:
+
+```bash
+cargo run --release -p maritime-router-prepare -- build --config config/phase1.toml --out phase1.mrd
+cargo run --release -p maritime-router-prepare -- stats phase1.mrd
+```
+
+[`config/phase1.toml`](config/phase1.toml) is the Phase-1 region (North Sea,
+Baltic, Norway, the Channel and a North Atlantic corridor to New York) and
+lists the Geofabrik extracts it was built from. It takes about 3 minutes and
+9 GB of memory on 15 cores and gives a 2 GB file with 27 million nodes.
+
+## Routing and acceptance cases
+
+```bash
+# A route as GeoJSON (waypoints as lat,lon; put -- before a negative latitude)
+cargo run --release -p maritime-router-cli -- route --data phase1.mrd --out route.geojson 53.5295,9.9613 50.8927,-1.4003
+# The acceptance cases: one GeoJSON per case plus summary.json and summary.md
+cargo run --release -p maritime-router-cli -- test --data phase1.mrd testdata/cases.yaml --out results/
+# Property tests on a data file (random open-sea pairs)
+MR_DATA=$PWD/phase1.mrd cargo test --release -p maritime-router-acceptance --test regional
+```
+
+Each case in [`testdata/cases.yaml`](testdata/cases.yaml) has verified
+terminal coordinates and, where one exists, an NGA Pub. 151 reference
+distance with a note on what it measures. Besides its expectations, every
+route is checked twice for land crossings (snap connectors excluded): against
+the model's cells, and against the osmdata land polygons minus OSM inland
+water, passage corridors and overrides (`--land-polygons`, default
+`sources/land-polygons-split-4326`).
+
+To look at the results, serve the repository root and open the viewer:
+
+```bash
+python3 -m http.server 8000
+```
+
+Then open <http://localhost:8000/viewer/>. It lists the cases with pass/fail,
+draws each route with its snap points, snap connectors and passages, and shows
+the checks per case (`?results=<dir>/` reads another results directory).
+
 ## Configuration
 
 _Server environment variables will be documented here._
