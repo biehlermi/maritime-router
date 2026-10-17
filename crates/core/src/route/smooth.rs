@@ -29,11 +29,16 @@
 //! **Visibility** of a segment that replaces the path cells `a..=b`: the
 //! great-circle arc may only enter allowed navigable cells, and each cell
 //! must either be one of those path cells or have a shore distance of at
-//! least the **adaptive clearance**: the smallest
-//! `min(target for the cell's class, 0.9 × shore distance)` over the path
-//! cells strictly between `a` and `b`. The shortcut therefore never comes
-//! closer to land than the path it replaces, and narrow channels keep the
-//! line centred. A segment between consecutive anchors is a graph edge (or
+//! least the **adaptive clearance** where the arc enters it: the smallest
+//! usable clearance `min(target for the cell's class, 0.9 × shore
+//! distance)` of the path cells next to the matching position along the
+//! path (the cell's place along the arc, mapped onto the path between `a`
+//! and `b` by distance; [`LOCAL_CLEARANCE_SPAN`] cells either side, only
+//! cells strictly between `a` and `b`). The shortcut therefore keeps the
+//! clearance the path itself kept at about the same place: it never comes
+//! closer to land than the path it replaces, and a narrow spot somewhere
+//! along a stretch doesn't let the line drift to the bank all along it, so
+//! lines stay centred where the path is. A segment between consecutive anchors is a graph edge (or
 //! lies in one cell), which is navigable by the model's invariants, so the
 //! pipeline always succeeds.
 
@@ -85,6 +90,10 @@ impl Default for SmoothingConfig {
         }
     }
 }
+
+/// Path cells on either side of the matching position whose usable
+/// clearance a shortcut must keep (see the module docs).
+const LOCAL_CLEARANCE_SPAN: usize = 2;
 
 /// Bisection steps when sliding a corner towards its chord.
 const RELAX_BISECTIONS: u32 = 8;
@@ -142,18 +151,37 @@ struct Smoother<'a, 'g> {
     pos: FxHashMap<u32, usize>,
     /// Usable clearance per path index.
     usable: Vec<f64>,
+    /// Angle along the path from its first cell centre, per path index.
+    along: Vec<f64>,
 }
 
 impl Smoother<'_, '_> {
-    /// Adaptive clearance for a segment replacing path indices `a..=b`.
-    fn clearance(&self, a: usize, b: usize) -> f64 {
-        let (a, b) = (a.min(b), a.max(b));
-        let inner = if b - a >= 2 {
-            &self.usable[a + 1..b]
+    /// The path indices whose clearance counts for a segment replacing
+    /// `lo..=hi` (`lo <= hi`): those strictly between, or both ends.
+    fn inner(lo: usize, hi: usize) -> (usize, usize) {
+        if hi - lo >= 2 {
+            (lo + 1, hi - 1)
         } else {
-            &self.usable[a..=b]
-        };
-        inner.iter().copied().fold(f64::INFINITY, f64::min)
+            (lo, hi)
+        }
+    }
+
+    /// Adaptive clearance at share `t` of the way from path index `lo` to
+    /// `hi` (`lo <= hi`): the smallest usable clearance of the inner path
+    /// cells within [`LOCAL_CLEARANCE_SPAN`] of the cell at that distance
+    /// along the path.
+    fn clearance_at(&self, lo: usize, hi: usize, t: f64) -> f64 {
+        let (s, e) = Self::inner(lo, hi);
+        let pos = self.along[lo] + t.clamp(0.0, 1.0) * (self.along[hi] - self.along[lo]);
+        let k = (s + self.along[s..=e].partition_point(|&x| x < pos)).min(e);
+        let (from, to) = (
+            k.saturating_sub(LOCAL_CLEARANCE_SPAN).max(s),
+            (k + LOCAL_CLEARANCE_SPAN).min(e),
+        );
+        self.usable[from..=to]
+            .iter()
+            .copied()
+            .fold(f64::INFINITY, f64::min)
     }
 
     /// Whether the arc `from`–`to` may replace the path between indices
@@ -166,15 +194,25 @@ impl Smoother<'_, '_> {
     /// it.
     fn visible(&self, from: Point3, to: Point3, first: usize, last: usize, slack: f64) -> bool {
         let (lo, hi) = (first.min(last), first.max(last));
-        let clearance = (self.clearance(lo, hi) - slack).max(0.0);
         let graph = self.graph;
+        let span = from.angle(to);
+        // Share of the way from path index `lo` to `hi` where the arc
+        // passes the centre of `node`.
+        let share = |node: NodeId| {
+            if span == 0.0 {
+                return 0.0;
+            }
+            let t = from.angle(closest_on_arc(graph.centre(node), from, to)) / span;
+            if first <= last { t } else { 1.0 - t }
+        };
         let walk = |a: Point3, b: Point3| {
             walk_arc(graph.cells(), graph.max_level(), a, b, |index| {
                 #[expect(clippy::cast_possible_truncation, reason = "node counts fit in u32")]
                 let node = NodeId(index as u32);
                 self.filter.allows_node(graph, node)
                     && (self.pos.get(&node.0).is_some_and(|k| (lo..=hi).contains(k))
-                        || f64::from(graph.shore_m(node)) >= clearance)
+                        || f64::from(graph.shore_m(node))
+                            >= (self.clearance_at(lo, hi, share(node)) - slack).max(0.0))
             })
         };
         if !walk(from, to) {
@@ -539,11 +577,20 @@ pub(crate) fn smooth(
             target.min(config.clearance_factor * shore)
         })
         .collect();
+    let mut along = Vec::with_capacity(path.len());
+    let mut total = 0.0;
+    for (k, &n) in path.iter().enumerate() {
+        if k > 0 {
+            total += graph.centre(path[k - 1]).angle(graph.centre(n));
+        }
+        along.push(total);
+    }
     let smoother = Smoother {
         graph,
         filter,
         pos: path.iter().enumerate().map(|(k, n)| (n.0, k)).collect(),
         usable,
+        along,
     };
 
     let last = path.len().saturating_sub(1);
