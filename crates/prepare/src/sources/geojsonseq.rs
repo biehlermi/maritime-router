@@ -11,6 +11,11 @@ use super::{ClassSet, ReadError, SourceClass, SourceFeature, overlaps};
 /// `water=*` values (with `natural=water`) that count as inland water.
 const INLAND_WATER_VALUES: [&str; 6] = ["river", "canal", "lagoon", "basin", "lock", "harbour"];
 
+/// `natural=*` values that are tidal flats when tagged `tidal=yes`: banks
+/// that fall dry at low tide. Shoals without `tidal=yes` are submerged; with
+/// no depth data they are left navigable.
+const DRYING_NATURAL_VALUES: [&str; 3] = ["shoal", "sand", "mud"];
+
 /// Classifies a feature by its OSM tags (spec §4). Returns the empty set for
 /// features that contribute nothing, such as untagged multipolygon members
 /// that the osmium filter pulls in.
@@ -39,6 +44,17 @@ pub fn classify_tags(tags: &JsonObject) -> ClassSet {
     }
     if tag("amenity") == Some("ferry_terminal") {
         classes.insert(SourceClass::FerryTerminal);
+    }
+    // Tidal flats (`natural=wetland` + `wetland=tidalflat`, the usual tagging;
+    // a few use `natural=mud` or `natural=sand` with it). Water that is also
+    // tagged as a flat stays water.
+    let drying = tag("tidal") == Some("yes")
+        && tag("natural").is_some_and(|v| DRYING_NATURAL_VALUES.contains(&v));
+    if (tag("wetland") == Some("tidalflat") && tag("natural") != Some("water")) || drying {
+        classes.insert(SourceClass::TidalFlat);
+    }
+    if tag("waterway") == Some("fairway") {
+        classes.insert(SourceClass::Fairway);
     }
     classes
 }
@@ -136,8 +152,17 @@ impl<R: BufRead> GeoJsonSeqReader<R> {
             })?;
         let is_area = matches!(geometry, Geometry::Polygon(_) | Geometry::MultiPolygon(_));
         let is_point = matches!(geometry, Geometry::Point(_) | Geometry::MultiPoint(_));
+        let is_line = matches!(
+            geometry,
+            Geometry::LineString(_) | Geometry::MultiLineString(_)
+        );
         for class in classes.iter() {
-            if !(is_area || (is_point && !class.requires_area())) {
+            let fits = if class.requires_line() {
+                is_line
+            } else {
+                is_area || (is_point && !class.requires_area())
+            };
+            if !fits {
                 classes.remove(class);
             }
         }

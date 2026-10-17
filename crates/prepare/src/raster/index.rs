@@ -24,6 +24,8 @@ pub(crate) enum Layer {
     Inland,
     /// `water=lake`.
     Lake,
+    /// Tidal flat (blocked inside the water union).
+    TidalFlat,
     /// Harbour area (finest detail; water inside is harbour water).
     HarbourArea,
     /// Ferry terminal area, buffered by the ferry buffer.
@@ -52,10 +54,11 @@ pub(crate) struct LayerPolygon {
     pub polygon: Polygon<f64>,
 }
 
-/// A passage corridor drawn as a buffered centre line.
+/// A passage corridor drawn as a buffered centre line, or (without a
+/// passage) a fairway corridor that keeps tidal flats open.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CorridorLine {
-    pub passage: u8,
+    pub passage: Option<u8>,
     pub line: LineString<f64>,
     pub width_m: f64,
 }
@@ -92,6 +95,7 @@ pub struct SourceIndexBuilder {
     passage_ids: Vec<String>,
     harbour_point_buffer_m: f64,
     ferry_buffer_m: f64,
+    fairway_width_m: f64,
 }
 
 /// Degrees of latitude per metre.
@@ -130,6 +134,35 @@ impl SourceIndexBuilder {
             passage_ids: Vec::new(),
             harbour_point_buffer_m,
             ferry_buffer_m,
+            fairway_width_m: crate::config::WaterConfig::default().tidal_fairway_width_m,
+        }
+    }
+
+    /// Sets the width of the corridor kept open through tidal flats along
+    /// fairway lines (`water.tidal_fairway_width_m`; 0 ignores fairways).
+    #[must_use]
+    pub fn with_fairway_width(mut self, width_m: f64) -> Self {
+        self.fairway_width_m = width_m;
+        self
+    }
+
+    fn push_fairway(&mut self, geometry: &Geometry<f64>) {
+        if self.fairway_width_m <= 0.0 {
+            return;
+        }
+        let lines: Vec<&LineString<f64>> = match geometry {
+            Geometry::LineString(l) => vec![l],
+            Geometry::MultiLineString(ml) => ml.0.iter().collect(),
+            _ => Vec::new(),
+        };
+        for line in lines {
+            if line.0.len() >= 2 {
+                self.lines.push(CorridorLine {
+                    passage: None,
+                    line: line.clone(),
+                    width_m: self.fairway_width_m,
+                });
+            }
         }
     }
 
@@ -171,6 +204,8 @@ impl SourceIndexBuilder {
                 SourceClass::Land => {}
                 SourceClass::InlandWater => self.push_polygons(Layer::Inland, 0, g),
                 SourceClass::Lake => self.push_polygons(Layer::Lake, 0, g),
+                SourceClass::TidalFlat => self.push_polygons(Layer::TidalFlat, 0, g),
+                SourceClass::Fairway => self.push_fairway(g),
                 SourceClass::Harbour if is_area => self.push_polygons(Layer::HarbourArea, 0, g),
                 SourceClass::Harbour => self.push_points(g, self.harbour_point_buffer_m),
                 SourceClass::FerryTerminal if is_area => {
@@ -203,7 +238,7 @@ impl SourceIndexBuilder {
                     Corridor::Line { line, width_m } => {
                         for ls in &line.0 {
                             self.lines.push(CorridorLine {
-                                passage: index,
+                                passage: Some(index),
                                 line: ls.clone(),
                                 width_m: *width_m,
                             });
@@ -279,7 +314,8 @@ impl SourceIndexBuilder {
 impl SourceIndex {
     /// Reads every source named in `config`: the water polygons, the
     /// filtered OSM file, the passages and the overrides. With region boxes,
-    /// features are read if they overlap a box grown by `margin_m`.
+    /// features are read if they overlap a box grown by `margin_m`. Tidal
+    /// flats and fairways are only read with `water.exclude_tidal_flats`.
     pub fn load(config: &Config, margin_m: f64) -> anyhow::Result<Self> {
         use anyhow::Context;
         // The readers filter by the envelope of all boxes; features are
@@ -318,7 +354,8 @@ impl SourceIndex {
         };
         let h = &config.harbour;
         let mut builder =
-            SourceIndexBuilder::new(h.harbour_point_buffer_m, h.ferry_terminal_buffer_m);
+            SourceIndexBuilder::new(h.harbour_point_buffer_m, h.ferry_terminal_buffer_m)
+                .with_fairway_width(config.water.tidal_fairway_width_m);
         let src = &config.sources;
         let reader = ShapefileReader::open(&src.water_polygons, SourceClass::Sea, envelope)
             .with_context(|| format!("opening {}", src.water_polygons.display()))?;
@@ -331,8 +368,12 @@ impl SourceIndex {
         let file = File::open(&src.osm_filtered)
             .with_context(|| format!("opening {}", src.osm_filtered.display()))?;
         for feature in GeoJsonSeqReader::new(BufReader::new(file), envelope) {
-            let feature = feature.with_context(|| src.osm_filtered.display().to_string())?;
-            if wanted(&feature) {
+            let mut feature = feature.with_context(|| src.osm_filtered.display().to_string())?;
+            if !config.water.exclude_tidal_flats {
+                feature.classes.remove(SourceClass::TidalFlat);
+                feature.classes.remove(SourceClass::Fairway);
+            }
+            if !feature.classes.is_empty() && wanted(&feature) {
                 builder.add_feature(&feature);
             }
         }
@@ -342,7 +383,8 @@ impl SourceIndex {
         Ok(builder.build())
     }
 
-    /// Number of polygons, points and corridor lines.
+    /// Number of polygons, points and corridor lines (passages and
+    /// fairways).
     pub fn counts(&self) -> (usize, usize, usize) {
         (self.polygons.len(), self.points.len(), self.lines.len())
     }

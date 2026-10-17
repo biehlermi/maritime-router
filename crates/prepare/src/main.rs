@@ -244,11 +244,11 @@ fn validate(args: &ValidateArgs) -> Result<()> {
 #[derive(Debug, Default)]
 struct RasterStats {
     /// Uniform tiles per class.
-    uniform: [u64; 10],
+    uniform: [u64; PixelClass::ALL.len()],
     /// Detailed tiles per raster level.
     rasters: BTreeMap<u8, u64>,
     /// Pixels of detailed tiles per class.
-    pixels: [u64; 10],
+    pixels: [u64; PixelClass::ALL.len()],
     errors: Vec<String>,
 }
 
@@ -282,7 +282,7 @@ impl RasterStats {
             let n = self.pixels[class as usize];
             if n > 0 {
                 let share = 100.0 * n as f64 / total.max(1) as f64;
-                println!("  {:>9} {n:>12} ({share:.2}%)", class.name());
+                println!("  {:>10} {n:>12} ({share:.2}%)", class.name());
             }
         }
     }

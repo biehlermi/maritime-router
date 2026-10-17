@@ -4,7 +4,7 @@ use geo::{Contains, Coord, LineString, Point, Polygon, Rect, unary_union};
 use maritime_router_core::grid::CellId;
 
 use super::edt::{self, Metric};
-use super::index::{Item, Layer, SourceIndex};
+use super::index::{CorridorLine, Item, Layer, SourceIndex};
 use super::scan::{Mask, supercover_segment};
 use super::window::TileWindow;
 use super::{Pixel, PixelClass, RasterParams, TileRaster, TileResult};
@@ -32,9 +32,11 @@ pub fn process_tile(index: &SourceIndex, params: &RasterParams, tile: CellId) ->
             pixel: Pixel::new(PixelClass::Land),
         };
     }
-    // Harbour regions and passage corridors get the finest raster.
+    // Harbour regions and passage corridors get the finest raster (fairways
+    // don't).
     let harbour = items.iter().any(|&(item, _)| match item {
-        Item::Point(_) | Item::Line(_) => true,
+        Item::Point(_) => true,
+        Item::Line(i) => index.lines[i as usize].passage.is_some(),
         Item::Polygon(i) => matches!(
             index.polygons[i as usize].layer,
             Layer::HarbourArea | Layer::FerryArea | Layer::PassageArea
@@ -73,8 +75,14 @@ pub fn process_tile(index: &SourceIndex, params: &RasterParams, tile: CellId) ->
         .collect();
 
     let only_sea = items.iter().all(|&(item, _)| match item {
-        Item::Polygon(i) => index.polygons[i as usize].layer == Layer::Sea,
-        _ => false,
+        Item::Polygon(i) => match index.polygons[i as usize].layer {
+            Layer::Sea => true,
+            Layer::TidalFlat => !params.exclude_tidal_flats,
+            _ => false,
+        },
+        // A fairway only matters across tidal flats.
+        Item::Line(i) => index.lines[i as usize].passage.is_none(),
+        Item::Point(_) => false,
     });
     if only_sea && !rings_reach_window(&union_rings, win.w, win.h) {
         let (lon, lat) = win.unproject(win.w as f64 / 2.0, win.h as f64 / 2.0);
@@ -113,6 +121,7 @@ fn rasterise(
     let mut sea = Mask::new(w, h);
     let mut inland = Mask::new(w, h);
     let mut lake = Mask::new(w, h);
+    let mut flat = Mask::new(w, h);
     let mut harbour = Mask::new(w, h);
     let mut ferry = Mask::new(w, h);
     let mut passage_areas: Vec<(u8, Vec<Ring>)> = Vec::new();
@@ -132,6 +141,12 @@ fn rasterise(
             Layer::Sea => sea.fill(&rings),
             Layer::Inland => inland.fill(&rings),
             Layer::Lake => lake.fill(&rings),
+            // Conservative like shores: every pixel a flat touches.
+            Layer::TidalFlat if params.exclude_tidal_flats => {
+                flat.fill(&rings);
+                flat.mark_edges(&rings);
+            }
+            Layer::TidalFlat => {}
             Layer::HarbourArea => harbour.fill(&rings),
             Layer::FerryArea => ferry.fill(&rings),
             Layer::PassageArea => passage_areas.push((lp.passage, rings)),
@@ -156,13 +171,31 @@ fn rasterise(
         }
     }
 
-    // Base classes.
+    // Fairways keep a corridor open through the flats: pixels entirely
+    // inside it and those its centre line touches.
+    let mut fairway = Mask::new(w, h);
+    if flat.any() {
+        for &(item, shift) in items {
+            let Item::Line(i) = item else { continue };
+            let line = &index.lines[i as usize];
+            if line.passage.is_none() {
+                corridor_pixels(win, line, shift, |p| fairway.bits[p] = true);
+            }
+        }
+    }
+
+    // Base classes. Tidal flats lie inside the water union (the coastline
+    // is at mean high water) and block it outside fairway corridors; they
+    // come before the width rules, so channels between flats must meet the
+    // minimum widths.
     let class: Vec<PixelClass> = (0..n)
         .map(|p| {
             if shore.bits[p] {
                 PixelClass::Shore
             } else if water.bits[p] {
-                if harbour.bits[p] {
+                if flat.bits[p] && !fairway.bits[p] {
+                    PixelClass::TidalFlat
+                } else if harbour.bits[p] {
                     PixelClass::Harbour
                 } else if sea.bits[p] {
                     PixelClass::Sea
@@ -207,28 +240,9 @@ fn rasterise(
     for &(item, shift) in items {
         let Item::Line(i) = item else { continue };
         let line = &index.lines[i as usize];
-        let coords: Vec<Coord<f64>> = line
-            .line
-            .0
-            .iter()
-            .map(|c| Coord {
-                x: c.x + shift,
-                y: c.y,
-            })
-            .collect();
-        let pts: Vec<[f64; 2]> = densify(&coords, false)
-            .iter()
-            .filter_map(|c| win.project(c.x, c.y))
-            .collect();
-        let passage = Pixel::passage_pixel(line.passage);
-        for seg in pts.windows(2) {
-            mark_capsule(w, h, metric, seg[0], seg[1], line.width_m / 2.0, |p| {
-                pixels[p] = passage;
-            });
-            // The centre line's supercover keeps the corridor edge-connected
-            // where it is too narrow for a connected chain of pixels lying
-            // entirely inside it (under 2√2 pixels on a diagonal heading).
-            supercover_segment(seg[0], seg[1], w, h, |x, y| pixels[y * w + x] = passage);
+        if let Some(passage) = line.passage {
+            let passage = Pixel::passage_pixel(passage);
+            corridor_pixels(win, line, shift, |p| pixels[p] = passage);
         }
     }
     // Overrides: navigable inside, blocked wherever they touch.
@@ -249,7 +263,7 @@ fn rasterise(
         *px = px.with_harbour_region(hb);
     }
     if win.level > params.coast_level {
-        coarsen_outside_harbours(&mut pixels, win, params.coast_level);
+        coarsen_outside_harbours(&mut pixels, &fairway.bits, win, params.coast_level);
     }
 
     // Shore distance and channel width on the final classes.
@@ -291,9 +305,15 @@ fn rasterise(
 /// cell at `coast_level` that is partly non-navigable and has no pixel in a
 /// harbour region, passage or override becomes non-navigable as a whole
 /// ([`PixelClass::Shore`]), as it would be in a coast-level raster. Harbour
-/// regions and curated corridors keep the finer detail. Runs before the
-/// distance transform, so shore distances and widths see the result.
-fn coarsen_outside_harbours(pixels: &mut [Pixel], win: &TileWindow, coast_level: u8) {
+/// regions, curated corridors and fairway corridors through tidal flats
+/// (`keep`) keep the finer detail. Runs before the distance transform, so
+/// shore distances and widths see the result.
+fn coarsen_outside_harbours(
+    pixels: &mut [Pixel],
+    keep: &[bool],
+    win: &TileWindow,
+    coast_level: u8,
+) {
     let b = 1i64 << (win.level - coast_level);
     let (w, h) = (win.w as i64, win.h as i64);
     // Window ranges of the blocks, aligned to the face grid at coast level.
@@ -310,10 +330,12 @@ fn coarsen_outside_harbours(pixels: &mut [Pixel], win: &TileWindow, coast_level:
         for (x0, x1) in blocks(win.origin[0], w) {
             let (mut navigable, mut blocked, mut fine) = (false, false, false);
             for y in y0..y1 {
-                for p in &pixels[y * win.w + x0..y * win.w + x1] {
+                let row = y * win.w + x0..y * win.w + x1;
+                for (p, &k) in pixels[row.clone()].iter().zip(&keep[row]) {
                     navigable |= p.is_navigable();
                     blocked |= !p.is_navigable();
-                    fine |= p.in_harbour_region()
+                    fine |= k
+                        || p.in_harbour_region()
                         || matches!(p.class(), PixelClass::Passage | PixelClass::Override);
                 }
             }
@@ -327,6 +349,40 @@ fn coarsen_outside_harbours(pixels: &mut [Pixel], win: &TileWindow, coast_level:
                 }
             }
         }
+    }
+}
+
+/// Calls `mark` for the pixels of a corridor line: those lying entirely
+/// within half its width of the centre line, and those the centre line
+/// touches. The latter keep the corridor edge-connected where it is too
+/// narrow for a connected chain of pixels lying entirely inside it (under
+/// 2√2 pixels on a diagonal heading).
+fn corridor_pixels(win: &TileWindow, line: &CorridorLine, shift: f64, mut mark: impl FnMut(usize)) {
+    let (w, h) = (win.w, win.h);
+    let coords: Vec<Coord<f64>> = line
+        .line
+        .0
+        .iter()
+        .map(|c| Coord {
+            x: c.x + shift,
+            y: c.y,
+        })
+        .collect();
+    let pts: Vec<[f64; 2]> = densify(&coords, false)
+        .iter()
+        .filter_map(|c| win.project(c.x, c.y))
+        .collect();
+    for seg in pts.windows(2) {
+        mark_capsule(
+            w,
+            h,
+            win.metric,
+            seg[0],
+            seg[1],
+            line.width_m / 2.0,
+            &mut mark,
+        );
+        supercover_segment(seg[0], seg[1], w, h, |x, y| mark(y * w + x));
     }
 }
 

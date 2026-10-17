@@ -8,10 +8,18 @@
 #   - harbour areas: landuse=harbour, industrial=port, harbour=yes,
 #     seamark:type=harbour
 #   - amenity=ferry_terminal
+#   - tidal flats: wetland=tidalflat (with natural=wetland, the usual tagging),
+#     natural=shoal|sand|mud with tidal=yes. The coastline is at mean high
+#     water, so flats such as the Wadden Sea lie inside the sea polygons and
+#     the build blocks them ([water] exclude_tidal_flats).
+#   - fairway centre lines (waterway=fairway, exported as lines): a corridor
+#     along them stays open through tidal flats ([water] tidal_fairway_width_m),
+#     so harbours reached through buoyed tidal channels stay reachable.
 #
 # osmium filters by single tags, so it keeps every area with one of the water=*
-# values; the exact combination (natural=water plus water=*) is checked by the
-# reader in crates/prepare. `osmium export` assembles multipolygons.
+# values (and every tidal=yes area); the exact combinations (natural=water plus
+# water=*, natural=shoal plus tidal=yes) are checked by the reader in
+# crates/prepare. `osmium export` assembles multipolygons.
 #
 # Uses a local osmium if there is one, otherwise osmium-tool 1.19.0 in a Docker
 # image built from scripts/osmium.Dockerfile on first use.
@@ -36,9 +44,12 @@ FILTERS=(
   "nwr/harbour=yes"
   "nwr/seamark:type=harbour"
   "nwr/amenity=ferry_terminal"
+  "a/wetland=tidalflat"
+  "a/tidal=yes"
+  "w/waterway=fairway"
 )
 # Only these tags are written to the output; the reader needs no others.
-KEEP_TAGS='["natural","water","waterway","landuse","industrial","harbour","seamark:type","amenity","name"]'
+KEEP_TAGS='["natural","water","waterway","landuse","industrial","harbour","seamark:type","amenity","wetland","tidal","name"]'
 
 usage() {
   sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//' >&2
@@ -116,7 +127,7 @@ cat >"$work/export.json" <<EOF
 {
   "attributes": {"type": false, "id": false, "version": false, "changeset": false,
                  "timestamp": false, "uid": false, "user": false, "way_nodes": false},
-  "linear_tags": false,
+  "linear_tags": ["waterway=fairway"],
   "area_tags": true,
   "include_tags": $KEEP_TAGS
 }
@@ -124,7 +135,7 @@ EOF
 
 echo "exporting GeoJSONSeq" >&2
 osmium_cmd export --overwrite --config "$work/export.json" \
-  --format geojsonseq --add-unique-id type_id --geometry-types point,polygon \
+  --format geojsonseq --add-unique-id type_id --geometry-types point,linestring,polygon \
   -o "$work/out.geojsonseq" "$work/filtered.osm.pbf"
 
 features="$(wc -l <"$work/out.geojsonseq" | tr -d ' ')"

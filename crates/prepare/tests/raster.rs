@@ -79,6 +79,7 @@ fn params(tile_level: u8, harbour_level: u8) -> RasterParams {
         inland_min_width_m: 300.0,
         harbour_min_width_m: 100.0,
         include_lakes: false,
+        exclude_tidal_flats: true,
     }
 }
 
@@ -431,4 +432,180 @@ fn antimeridian_is_not_a_shore() {
         }
     }
     assert!(r.shore_m.iter().any(|&d| d < 2000.0), "the island is seen");
+}
+
+/// Sea west of x = 3000 m (land east of it), covered by two tidal flats
+/// (x from -3000 to 3200) that leave a 600 m channel along y = 0. A passage
+/// corridor crosses the north flat at x = -1000 and a `force_navigable`
+/// override covers part of it.
+fn tidal_scene(frame: Frame) -> SourceIndex {
+    let f = frame;
+    let mut b = SourceIndexBuilder::new(300.0, 300.0);
+    b.add_feature(&feature(
+        SourceClass::Sea,
+        f.rect(-20_000.0, -20_000.0, 3000.0, 20_000.0).into(),
+    ));
+    for (y0, y1) in [(300.0, 3000.0), (-3000.0, -300.0)] {
+        b.add_feature(&feature(
+            SourceClass::TidalFlat,
+            f.rect(-3000.0, y0, 3200.0, y1).into(),
+        ));
+    }
+    b.add_passages(&[Passage {
+        id: "fairway".into(),
+        name: "Fairway".into(),
+        default: PassageDefault::Allowed,
+        limits: Limits::default(),
+        limits_note: None,
+        features: vec![PassageFeature {
+            corridor: Corridor::Line {
+                line: MultiLineString(vec![LineString(vec![
+                    f.coord(-1000.0, 0.0),
+                    f.coord(-1000.0, 3500.0),
+                ])]),
+                width_m: 200.0,
+            },
+            sources: vec!["test".into()],
+            note: None,
+        }],
+    }]);
+    b.add_overrides(&[Override {
+        id: None,
+        effect: OverrideEffect::ForceNavigable,
+        reason: "test".into(),
+        sources: vec![],
+        area: MultiPolygon(vec![f.rect(1000.0, 1500.0, 2000.0, 2500.0)]),
+    }]);
+    b.build()
+}
+
+#[test]
+fn tidal_flats_block_sea_unless_curated() {
+    let tile = scene_tile();
+    let frame = frame_of(tile);
+    let index = tidal_scene(frame);
+    let r = raster(process_tile(&index, &params(10, 18), tile));
+    let class = |x, y| at(&r, frame, x, y).0.class();
+
+    // Flats are not navigable; the channel between them and the sea
+    // outside them are.
+    assert_eq!(class(-2000.0, 2000.0), PixelClass::TidalFlat);
+    assert_eq!(class(0.0, -2000.0), PixelClass::TidalFlat);
+    assert_eq!(class(0.0, 0.0), PixelClass::Sea);
+    assert_eq!(class(-3500.0, 2000.0), PixelClass::Sea);
+    // Conservative boundary: the pixel on the flat's edge is blocked, one
+    // two pixels off it is sea.
+    assert_eq!(class(0.0, 300.0), PixelClass::TidalFlat);
+    assert_eq!(class(0.0, 200.0), PixelClass::Sea);
+    assert_eq!(class(-3000.0, 1500.0), PixelClass::TidalFlat);
+    assert_eq!(class(-3100.0, 1500.0), PixelClass::Sea);
+    // Land stays land, also under a flat that reaches past the coast.
+    assert_eq!(class(3100.0, 2000.0), PixelClass::Land);
+    // Curated data wins.
+    assert_eq!(class(-1000.0, 2000.0), PixelClass::Passage);
+    assert_eq!(class(1500.0, 2000.0), PixelClass::Override);
+    // Shore distances see the flats: the channel centre is ~300 m from them.
+    let (_, shore, _) = at(&r, frame, 0.0, 0.0);
+    assert!((200.0..320.0).contains(&shore), "{shore}");
+
+    // With `exclude_tidal_flats = false` the flats are sea.
+    let mut keep = params(10, 18);
+    keep.exclude_tidal_flats = false;
+    let r = raster(process_tile(&index, &keep, tile));
+    assert!(r.pixels.iter().all(|p| p.class() != PixelClass::TidalFlat));
+    assert_eq!(at(&r, frame, -2000.0, 2000.0).0.class(), PixelClass::Sea);
+}
+
+#[test]
+fn tidal_flats_alone_make_no_uniform_sea_tile() {
+    // A tile inside the sea with a flat in its halo is detailed, and only
+    // while flats are excluded.
+    let tile = scene_tile();
+    let frame = frame_of(tile);
+    let mut b = SourceIndexBuilder::new(0.0, 0.0);
+    b.add_feature(&feature(
+        SourceClass::Sea,
+        frame.rect(-50_000.0, -50_000.0, 50_000.0, 50_000.0).into(),
+    ));
+    b.add_feature(&feature(
+        SourceClass::TidalFlat,
+        frame.rect(-500.0, -500.0, 500.0, 500.0).into(),
+    ));
+    let index = b.build();
+    let r = raster(process_tile(&index, &params(10, 18), tile));
+    assert_eq!(at(&r, frame, 0.0, 0.0).0.class(), PixelClass::TidalFlat);
+    let mut keep = params(10, 18);
+    keep.exclude_tidal_flats = false;
+    assert_eq!(
+        process_tile(&index, &keep, tile),
+        TileResult::Uniform {
+            tile,
+            pixel: Pixel::new(PixelClass::Sea)
+        }
+    );
+}
+
+#[test]
+fn fairways_keep_a_corridor_open_through_flats() {
+    // Sea everywhere west of x = 3000 m, a flat covering x from -3000 to
+    // 3200 and y from -3000 to 3000, and a fairway from the open sea across
+    // the flat and on over the land.
+    let tile = scene_tile();
+    let frame = frame_of(tile);
+    let build = |fairway_width_m: f64| {
+        let mut b = SourceIndexBuilder::new(300.0, 300.0).with_fairway_width(fairway_width_m);
+        b.add_feature(&feature(
+            SourceClass::Sea,
+            frame.rect(-20_000.0, -20_000.0, 3000.0, 20_000.0).into(),
+        ));
+        b.add_feature(&feature(
+            SourceClass::TidalFlat,
+            frame.rect(-3000.0, -3000.0, 3200.0, 3000.0).into(),
+        ));
+        b.add_feature(&feature(
+            SourceClass::Fairway,
+            LineString(vec![
+                frame.coord(-4000.0, -1000.0),
+                frame.coord(4000.0, 1000.0),
+            ])
+            .into(),
+        ));
+        b.build()
+    };
+    let index = build(100.0);
+    let r = raster(process_tile(&index, &params(10, 18), tile));
+    let class = |x: f64, y: f64| at(&r, frame, x, y).0.class();
+    // Along the fairway (y = x / 4) the flat is open.
+    for x in [-2500.0, -1000.0, 0.0, 1000.0, 2500.0] {
+        assert_eq!(class(x, x / 4.0), PixelClass::Sea, "x = {x}");
+    }
+    // 150 m off its centre line it is not.
+    assert_eq!(class(0.0, 150.0), PixelClass::TidalFlat);
+    assert_eq!(class(0.0, -150.0), PixelClass::TidalFlat);
+    // A fairway makes no land navigable.
+    assert_eq!(class(3600.0, 900.0), PixelClass::Land);
+    // The corridor is a channel of its own for distances: ~50 m to the flat.
+    let (_, shore, _) = at(&r, frame, 0.0, 0.0);
+    assert!(shore < 80.0, "{shore}");
+
+    // With width 0 fairways are ignored.
+    let r = raster(process_tile(&build(0.0), &params(10, 18), tile));
+    assert_eq!(at(&r, frame, 0.0, 0.0).0.class(), PixelClass::TidalFlat);
+    // And without flats a fairway in open sea leaves the tile uniform.
+    let mut b = SourceIndexBuilder::new(0.0, 0.0);
+    b.add_feature(&feature(
+        SourceClass::Sea,
+        frame.rect(-50_000.0, -50_000.0, 50_000.0, 50_000.0).into(),
+    ));
+    b.add_feature(&feature(
+        SourceClass::Fairway,
+        LineString(vec![frame.coord(-4000.0, 0.0), frame.coord(4000.0, 0.0)]).into(),
+    ));
+    assert_eq!(
+        process_tile(&b.build(), &params(10, 18), tile),
+        TileResult::Uniform {
+            tile,
+            pixel: Pixel::new(PixelClass::Sea)
+        }
+    );
 }

@@ -9,13 +9,13 @@
         "default": "allowed",
         "width_m": 40,
         "source": "Geometry: centre line of OSM waterway=canal ways 1470915264, 1470915263, 144489148, 144489145, 1470915265, 144489147, 144489146, 60144851; OpenStreetMap contributors (ODbL), retrieved 2026-10-16 via the Overpass API and simplified to 3 m",
-        "note": "Brunsbüttel locks: both large chambers (usable 310 m x 42 m), from the Elbe outer harbour to the canal. The small 1895 chambers (125 m x 22 m) are left out. Width checked against the OSM lock and canal areas: the 40 m corridor stays inside water (42 m would touch the walls). It must be at least about 38 m so that harbour-level cells (~18 m) lying entirely inside it form an edge-connected chain on any heading."
+        "note": "Brunsbüttel locks: both large chambers (usable 310 m x 42 m), from the mouth of the Elbe outer harbour (between the mole heads) to the canal. The canal ways' centre line continues about 1 km into the open Elbe; that part is left out, so routes along the Elbe fairway do not count as using the passage. The small 1895 chambers (125 m x 22 m) are left out. Width checked against the OSM lock and canal areas: the 40 m corridor stays inside water (42 m would touch the walls). It must be at least about 38 m so that harbour-level cells (~18 m) lying entirely inside it form an edge-connected chain on any heading."
       },
       "geometry": {
         "type": "MultiLineString",
         "coordinates": [
-          [[9.117921, 53.879463], [9.120433, 53.880161], [9.122901, 53.881109], [9.124961, 53.882298], [9.129066, 53.885231], [9.129649, 53.885513], [9.13386, 53.887995], [9.136531, 53.889374], [9.141436, 53.891505], [9.147231, 53.894625], [9.15204, 53.89696]],
-          [[9.117921, 53.879463], [9.120433, 53.880161], [9.122901, 53.881109], [9.124961, 53.882298], [9.129066, 53.885231], [9.129649, 53.885513], [9.13386, 53.887995], [9.136531, 53.889374], [9.140493, 53.891854], [9.146584, 53.895013], [9.148457, 53.896053], [9.15204, 53.89696]]
+          [[9.13386, 53.887995], [9.136531, 53.889374], [9.141436, 53.891505], [9.147231, 53.894625], [9.15204, 53.89696]],
+          [[9.13386, 53.887995], [9.136531, 53.889374], [9.140493, 53.891854], [9.146584, 53.895013], [9.148457, 53.896053], [9.15204, 53.89696]]
         ]
       }
     },

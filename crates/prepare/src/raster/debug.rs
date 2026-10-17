@@ -17,6 +17,7 @@ pub fn class_color(p: Pixel) -> [u8; 3] {
         PixelClass::Narrow => [245, 165, 40],
         PixelClass::Lake => [130, 175, 140],
         PixelClass::Blocked => [100, 20, 100],
+        PixelClass::TidalFlat => [175, 150, 105],
         PixelClass::Sea => [36, 84, 160],
         PixelClass::Inland => [80, 155, 215],
         PixelClass::Harbour => [20, 175, 170],

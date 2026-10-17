@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use geo::{Area, Geometry, Rect, coord};
 use maritime_router_prepare::sources::{
     ClassSet, GeoJsonSeqReader, GeoJsonSeqStats, ReadError, ShapefileReader, SourceClass,
-    SourceFeature,
+    SourceFeature, classify_tags,
 };
 use shapefile::{Point, Polygon, PolygonRing, ShapeWriter};
 
@@ -179,6 +179,73 @@ fn geojsonseq_reports_the_line_of_a_broken_feature() {
         Some(Err(ReadError::Json { line: 3, .. })) => {}
         other => panic!("expected a JSON error on line 3, got {other:?}"),
     }
+}
+
+#[test]
+fn classifies_tidal_flats() {
+    let classes = |json: &str| {
+        let tags: serde_json::Map<String, serde_json::Value> = serde_json::from_str(json).unwrap();
+        classify_tags(&tags)
+    };
+    let flat = ClassSet::only(SourceClass::TidalFlat);
+    // The usual Wadden Sea tagging, with or without tidal=yes.
+    assert_eq!(
+        classes(r#"{"natural":"wetland","wetland":"tidalflat","name":"Neuwerker Watt"}"#),
+        flat
+    );
+    assert_eq!(
+        classes(r#"{"natural":"wetland","wetland":"tidalflat","tidal":"yes"}"#),
+        flat
+    );
+    assert_eq!(classes(r#"{"natural":"mud","wetland":"tidalflat"}"#), flat);
+    assert_eq!(
+        classes(r#"{"waterway":"fairway","name":"Otzumer Balje"}"#),
+        ClassSet::only(SourceClass::Fairway)
+    );
+    // Drying banks.
+    assert_eq!(classes(r#"{"natural":"shoal","tidal":"yes"}"#), flat);
+    assert_eq!(classes(r#"{"natural":"sand","tidal":"yes"}"#), flat);
+    // Submerged shoals, beaches, salt marsh (above mean high water) and
+    // tidal water are not flats.
+    for json in [
+        r#"{"natural":"shoal"}"#,
+        r#"{"natural":"sand"}"#,
+        r#"{"natural":"wetland","wetland":"saltmarsh","tidal":"yes"}"#,
+        r#"{"natural":"water","tidal":"yes"}"#,
+        r#"{"natural":"water","wetland":"tidalflat"}"#,
+    ] {
+        assert!(classes(json).is_empty(), "{json}");
+    }
+    assert_eq!(
+        classes(r#"{"natural":"water","water":"river","tidal":"yes"}"#),
+        ClassSet::only(SourceClass::InlandWater)
+    );
+}
+
+#[test]
+fn tidal_flats_are_areas_and_fairways_lines() {
+    let input = concat!(
+        r#"{"type":"Feature","id":"a8","geometry":{"type":"Polygon","coordinates":[[[8.4,53.9],[8.5,53.9],[8.5,54.0],[8.4,53.9]]]},"properties":{"natural":"wetland","wetland":"tidalflat"}}"#,
+        "\n",
+        r#"{"type":"Feature","id":"n9","geometry":{"type":"Point","coordinates":[8.4,53.9]},"properties":{"natural":"shoal","tidal":"yes"}}"#,
+        "\n",
+        r#"{"type":"Feature","id":"w10","geometry":{"type":"LineString","coordinates":[[7.8,53.7],[7.81,53.75]]},"properties":{"waterway":"fairway","name":"Carolinensieler Balje"}}"#,
+        "\n",
+        r#"{"type":"Feature","id":"a22","geometry":{"type":"Polygon","coordinates":[[[8.4,53.9],[8.5,53.9],[8.5,54.0],[8.4,53.9]]]},"properties":{"waterway":"fairway"}}"#,
+        "\n",
+        r#"{"type":"Feature","id":"w12","geometry":{"type":"LineString","coordinates":[[7.8,53.7],[7.81,53.75]]},"properties":{"natural":"wetland","wetland":"tidalflat"}}"#,
+        "\n",
+    );
+    let mut reader = GeoJsonSeqReader::new(Cursor::new(input), None);
+    let features = reader.by_ref().collect::<Result<Vec<_>, _>>().unwrap();
+    assert_eq!(
+        classes(&features),
+        vec![
+            ("w4", vec![SourceClass::TidalFlat]),
+            ("w10", vec![SourceClass::Fairway]),
+        ]
+    );
+    assert_eq!(reader.stats().unsupported_geometry, 3);
 }
 
 /// Reads the real water polygons after `maritime-router-prepare download

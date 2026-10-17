@@ -25,6 +25,22 @@ tile_halo_m = 4000             # context around each ~40 km build tile; shore di
 inland_min_width_m = 150       # inland water narrower than this is removed (morphological opening)
 harbour_min_width_m = 30       # harbour water narrower than this is removed
 include_lakes = false          # lakes only via passage corridors or force_navigable overrides
+# Tidal flats are not navigable. The coastline (and so the sea polygon) is at
+# mean high water, so flats that fall dry at low tide, such as the Wadden Sea
+# from Den Helder to Esbjerg, are sea in the water polygons. With this set,
+# OSM tidal flats (wetland=tidalflat, the usual tagging; natural=shoal|sand|mud
+# with tidal=yes) block every pixel they touch, like a shore; the channels
+# between them stay sea. Shoals without tidal=yes are submerged and stay
+# navigable (there is no depth data).
+exclude_tidal_flats = true
+# Many Wadden harbours are reached through buoyed tidal channels that the flat
+# polygons cover (Harlesiel, Neuharlingersiel, Neßmersiel, Neuwerk, Schlüttsiel
+# ...). Along OSM fairway lines (waterway=fairway) a corridor this wide stays
+# open through the flats; it reopens only flat pixels inside the water union,
+# never land. 100 m is about the width of such a buoyed channel and gives two
+# to three cells across at the coast level. 0 turns fairways off. Elsewhere,
+# passage corridors and force_navigable overrides also win over flats.
+tidal_fairway_width_m = 100
 # Sea components (water connected to a sea cell, with all passages allowed)
 # smaller than this are dropped like ponds. The conservative raster cuts small
 # pieces off the sea (pockets behind a gap narrower than a cell, sea between
